@@ -1,0 +1,253 @@
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { api, mergeConversations, sameEnvironment, tabSession, type Agent, type AgentType, type Config, type Conversation, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
+import { applyTheme, storedTheme, themes, type ThemeName } from './theme';
+const Terminal = lazy(() => import('./Terminal'));
+const emptyAgent = { name: '', type: 'claude-code' as const, connection: 'ssh' as const, target: '', cwd: '~', executable: 'claude', configDir: '', initScript: '' };
+const agentTypes: Record<AgentType, { label: string; executable: string }> = {
+  'claude-code': { label: 'Claude Code', executable: 'claude' },
+  codex: { label: 'Codex', executable: 'codex' },
+  traex: { label: 'TraeX', executable: 'traex' },
+};
+const emptyWorkspace: Workspace = { selectedAgentId: null, agents: {} };
+const emptyHistory: History = { items: [], total: 0, warnings: [] };
+function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
+function timestamp(value: number) { return new Date(value).toLocaleDateString([], { month: '2-digit', day: '2-digit' }); }
+function AgentIcon({ type, size = 18 }: { type: Agent['type']; size?: number }) {
+  if (type === 'claude-code') return <span className="agent-icon claude-icon" title="Claude Code"><svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.25v19.5M2.25 12h19.5M5.1 5.1l13.8 13.8M18.9 5.1 5.1 18.9M8.27 2.98l7.46 18.04M21.02 8.27 2.98 15.73M15.73 2.98 8.27 21.02M2.98 8.27l18.04 7.46" /></svg><span className="sr-only">Claude Code</span></span>;
+  if (type === 'codex') return <span className="agent-icon codex-icon" title="Codex"><img className="codex-dark" src="/codex-icon-dark.png" width={size} height={size} alt="" /><img className="codex-light" src="/codex-icon-light.png" width={size} height={size} alt="" /><span className="sr-only">Codex</span></span>;
+  return <span className="agent-icon traex-icon" title="TraeX"><img src="/traex-icon.svg" width={size} height={size} alt="" /><span className="sr-only">TraeX</span></span>;
+}
+
+function AgentForm({ agent, onClose, onSaved }: { agent: Agent | null; onClose(): void; onSaved(agent: Agent): void }) {
+  const [form, setForm] = useState(agent ? { name: agent.name, type: agent.type, connection: agent.connection, target: agent.target, cwd: agent.cwd, executable: agent.executable, configDir: agent.configDir, initScript: agent.initScript ?? '' } : emptyAgent);
+  const [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  const act = async (probe: boolean) => {
+    setBusy(true); setNotice('');
+    try {
+      const payload = form.connection === 'local' ? form : (({ connection: _, ...remote }) => remote)(form);
+      if (probe) { const result = await api<{ message: string }>('/agents/probe', 'POST', payload); setNotice(result.message); }
+      else { const saved = await api<Agent>(agent ? `/agents/${agent.id}` : '/agents', agent ? 'PUT' : 'POST', payload); onSaved(saved); }
+    } catch (error) { setNotice(errorText(error)); }
+    finally { setBusy(false); }
+  };
+  const field = (key: keyof typeof form, title: string, placeholder: string, hint?: string) => <label>{title}<input aria-label={title} aria-describedby={hint ? `hint-${key}` : undefined} value={form[key]} placeholder={placeholder} required={key !== 'configDir'} onChange={event => setForm({ ...form, [key]: event.target.value })} />{hint && <small id={`hint-${key}`}>{hint}</small>}</label>;
+  return <dialog ref={dialog} onCancel={onClose} className="agent-dialog" aria-label={agent ? '编辑 Agent' : '注册 Agent'}><form onSubmit={event => { event.preventDefault(); void act(false); }}>
+    <div className="dialog-heading"><h2>{agent ? '编辑 Agent' : '注册 Agent'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button></div>
+    <p className="subtle">{form.connection === 'local' ? `直接使用本机 ${agentTypes[form.type].label}，不经过 SSH。` : '复用现有 SSH 配置，不安装远程服务。'}</p>
+    {field('name', '名称', '开发环境')}
+    <label>Agent 类型<span className="agent-type-control"><AgentIcon type={form.type} /><select aria-label="Agent 类型" value={form.type} disabled={!!agent} onChange={event => { const type = event.target.value as AgentType; setForm({ ...form, type, executable: agentTypes[type].executable }); }}>{Object.entries(agentTypes).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}</select></span></label>
+    {form.connection === 'ssh' && field('target', 'SSH 目标', 'dev-server 或 user@host', '首次连接请先在本机终端完成 SSH 主机信任。')}
+    {field('cwd', '默认工作目录', '~/projects')}
+    <details><summary>高级配置</summary>{field('executable', `${agentTypes[form.type].label} 可执行文件`, agentTypes[form.type].executable)}{field('configDir', 'Agent 配置目录（可选）', form.type === 'claude-code' ? '~/.claude' : form.type === 'codex' ? '~/.codex' : '~/.trae/cli', `留空时遵循${form.connection === 'local' ? '本机' : '远程'}默认配置目录。`)}<label>初始化脚本（Bash）<textarea aria-label="初始化脚本（Bash）" aria-describedby="init-script-hint" rows={6} maxLength={8192} value={form.initScript} onChange={event => setForm({ ...form, initScript: event.target.value })} placeholder={'source ~/.config/agent/env.sh\nexport PATH="$HOME/.local/bin:$PATH"'} spellCheck={false} /><small id="init-script-hint">在{form.connection === 'local' ? '本机' : '远程'}执行，启动、测试连接及历史查询都会运行。请使用可重复执行、无交互的脚本；显式配置目录优先。内容将明文保存到本地配置，密钥建议从权限受控的文件 source。</small></label></details>
+    {notice && <div className="notice" role="status">{notice}</div>}
+    <div className="dialog-actions"><button disabled={busy} type="button" onClick={() => void act(true)}>{busy ? '处理中…' : '测试连接'}</button><button disabled={busy} className="primary" type="submit">保存 Agent</button></div>
+  </form></dialog>;
+}
+
+function AgentManager({ agents, onClose, onEdit, onRemove }: { agents: Agent[]; onClose(): void; onEdit(agent: Agent | null): void; onRemove(agent: Agent): Promise<void> }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [error, setError] = useState('');
+  const [removing, setRemoving] = useState('');
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} onCancel={onClose} className="manager-dialog" aria-label="管理 Agents">
+    <div className="dialog-heading"><h2>Agents</h2><button className="icon-button" onClick={onClose} aria-label="关闭">×</button></div>
+    <p className="subtle">一个 Agent 对应一套本地或远程环境；同一台机器可以注册多个。</p>
+    <div className="managed-agents">{agents.map(agent => <div className="managed-agent" key={agent.id}><AgentIcon type={agent.type} size={20} /><div><strong>{agent.name}</strong><code>{agent.connection === 'local' ? '本机' : agent.target}</code><small>{agent.cwd}</small></div><button onClick={() => onEdit(agent)} aria-label={`编辑 ${agent.name}`}>编辑</button><button className="danger-button" disabled={!!removing} onClick={async () => { setError(''); setRemoving(agent.id); try { await onRemove(agent); } catch (error) { setError(errorText(error)); } finally { setRemoving(''); } }} aria-label={`移除 ${agent.name}`}>移除</button></div>)}</div>
+    {error && <div className="notice error" role="alert">{error}</div>}
+    <div className="dialog-actions"><button className="primary" onClick={() => onEdit(null)}>注册 Agent</button><button onClick={onClose}>完成</button></div>
+  </dialog>;
+}
+
+function ConversationLauncher({ agent, sessions, titles, limit, busy, onOpen, onStart }: { agent: Agent; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; onOpen(row: Conversation): Promise<void>; onStart(cwd: string): Promise<void> }) {
+  const [history, setHistory] = useState<History>(emptyHistory), [query, setQuery] = useState('');
+  const [cwd, setCwd] = useState(agent.cwd), [loading, setLoading] = useState(false), [error, setError] = useState('');
+  const offset = useRef(0), request = useRef<AbortController | undefined>(undefined);
+  const load = useCallback(async (more = false) => {
+    request.current?.abort(); const controller = new AbortController(); request.current = controller;
+    setLoading(true); setError(''); const start = more ? offset.current : 0;
+    try {
+      const result = await api<History>(`/agents/${agent.id}/history?offset=${start}&limit=${limit}&refresh=${!more}`, 'GET', undefined, controller.signal);
+      if (controller.signal.aborted) return;
+      offset.current = start + limit;
+      setHistory(previous => ({ ...result, items: more ? [...previous.items, ...result.items.filter(item => !previous.items.some(old => old.id === item.id))] : result.items }));
+    } catch (error) { if (!controller.signal.aborted) setError(errorText(error)); }
+    finally { if (!controller.signal.aborted) setLoading(false); }
+  }, [agent.id, limit]);
+  useEffect(() => { void load(); return () => request.current?.abort(); }, [load]);
+  const rows = mergeConversations(agent, sessions, history.items, titles).filter(row => `${row.title} ${row.cwd}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+  const start = async () => { setError(''); try { await onStart(cwd); } catch (error) { setError(errorText(error)); } };
+  return <div className="conversation-launcher">
+    <section className="new-conversation" aria-labelledby="new-conversation-heading">
+      <div className="launcher-heading"><div><h3 id="new-conversation-heading">新建对话</h3><p>在 {agent.name} 启动新的 {agentTypes[agent.type].label}</p></div></div>
+      <form onSubmit={event => { event.preventDefault(); void start(); }}>
+        <label>工作目录<input required value={cwd} onChange={event => setCwd(event.target.value)} spellCheck={false} /></label>
+        <button type="submit" className="primary" disabled={busy}>{busy ? '正在连接…' : `启动 ${agentTypes[agent.type].label}`}</button>
+      </form>
+    </section>
+    <section className="history-conversations" aria-labelledby="history-conversations-heading">
+      <div className="history-heading"><div className="launcher-heading"><div><h3 id="history-conversations-heading">打开历史对话</h3><p>接回活跃进程或恢复 {agentTypes[agent.type].label} 记录</p></div></div><button disabled={loading} onClick={() => void load()} aria-label="刷新历史对话" title="刷新历史对话">↻</button></div>
+      <input className="conversation-search" aria-label="搜索对话" placeholder="搜索标题或目录…" value={query} onChange={event => setQuery(event.target.value)} />
+      <div className="picker-list" aria-busy={loading}>{rows.map(row => <button className="conversation" key={row.key} disabled={busy} onClick={() => { setError(''); void onOpen(row).catch(error => setError(errorText(error))); }}>
+        <span className={`state-icon ${row.session?.status === 'running' ? 'running' : ''}`} aria-hidden="true" title={row.session?.status === 'running' ? '活跃' : '历史'} />
+        <span className="conversation-body"><span className="conversation-title">{row.title}</span><span className="conversation-meta"><span>{row.cwd}</span><time>{timestamp(row.modified)}</time></span></span><span className="sr-only">{row.session?.status === 'running' ? '活跃' : '历史'}</span>
+      </button>)}{!rows.length && !loading && <p className="list-empty">{query ? '没有匹配的对话' : '暂无历史对话'}</p>}</div>
+      {loading && <p className="history-status" role="status">读取 {agentTypes[agent.type].label} 对话…</p>}
+      {offset.current < history.total && <button className="load-more" disabled={loading} onClick={() => void load(true)}>加载更多</button>}
+    </section>
+    {(error || history.warnings.length > 0) && <div className="launcher-messages">{history.warnings.map(warning => <p className="sync-warning" key={warning}>{warning}</p>)}{error && <div className="notice error" role="alert">{error}</div>}</div>}
+  </div>;
+}
+
+function ConversationPicker({ agent, sessions, titles, limit, busy, onClose, onOpen, onStart }: { agent: Agent; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; onClose(): void; onOpen(row: Conversation): Promise<void>; onStart(cwd: string): Promise<void> }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog className="conversation-dialog" ref={dialog} onCancel={onClose} aria-label="打开对话">
+    <div className="dialog-heading"><h2>打开对话</h2><button className="icon-button" aria-label="关闭" onClick={onClose}>×</button></div>
+    <ConversationLauncher agent={agent} sessions={sessions} titles={titles} limit={limit} busy={busy} onOpen={onOpen} onStart={onStart} />
+  </dialog>;
+}
+
+export default function App() {
+  const [config, setConfig] = useState<Config>({ agents: [], historyLimit: 30, workspace: emptyWorkspace });
+  const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace);
+  const [sessions, setSessions] = useState<Session[]>([]), [titles, setTitles] = useState<HistoryItem[]>([]);
+  const [ready, setReady] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [titleError, setTitleError] = useState('');
+  const [modal, setModal] = useState<Agent | null | undefined>(undefined), [managing, setManaging] = useState(false);
+  const [dialog, setDialog] = useState<'open' | null>(null);
+  const [theme, setTheme] = useState<ThemeName>(storedTheme);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const launching = useRef(false);
+  const activatedTabs = useRef(new Set<string>());
+  const agent = config.agents.find(a => a.id === workspace.selectedAgentId) ?? config.agents[0];
+  const view = agent ? workspace.agents[agent.id] : undefined;
+  const tabs = view?.tabs ?? [];
+  const active = tabs.find(tab => tab.id === view?.activeTabId);
+  const activeSession = active && agent ? tabSession(active, agent, sessions) : undefined;
+  const environmentKey = agent ? JSON.stringify([agent.id, agent.connection, agent.target, agent.configDir, agent.initScriptKey]) : '';
+  const titleKey = JSON.stringify([tabs.map(t => t.agentSessionId), sessions.map(s => [s.id, s.status])]);
+  const titleFor = (tab: WorkspaceTab) => titles.find(item => item.id === tab.agentSessionId)?.title || (tab.agentSessionId ? '新对话' : '历史选择器');
+  useEffect(() => { applyTheme(theme); }, [theme]);
+  useEffect(() => {
+    const tab = active && document.getElementById(`tab-${active.id}`)?.parentElement;
+    if (tab) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [active?.id, environmentKey]);
+  const loadSessions = useCallback(async () => { const data = await api<Session[]>('/sessions'); setSessions(data); return data; }, []);
+  const changeWorkspace = useCallback((change: object) => {
+    const task = queue.current.then(async () => { const next = await api<Workspace>('/workspace', 'PATCH', change); setWorkspace(next); });
+    queue.current = task.catch(() => {}); return task;
+  }, []);
+  const act = (task: Promise<unknown>) => { setError(''); void task.catch(error => setError(errorText(error))); };
+  useEffect(() => {
+    let disposed = false;
+    void (async () => {
+      try {
+        const token = new URLSearchParams(location.hash.slice(1)).get('token');
+        if (token) { await api('/auth', 'POST', { token }); window.history.replaceState(null, '', location.pathname); }
+        const [data, running] = await Promise.all([api<Config>('/config'), api<Session[]>('/sessions')]);
+        if (!disposed) { setConfig(data); setWorkspace(data.workspace); setSessions(running); setReady(true); }
+      } catch (error) { if (!disposed) setError(errorText(error)); }
+    })();
+    return () => { disposed = true; };
+  }, []);
+  useEffect(() => {
+    if (!ready) return;
+    let disposed = false, timer: ReturnType<typeof setTimeout>;
+    const poll = async () => { try { await loadSessions(); } catch (error) { if (!disposed) setError(errorText(error)); } if (!disposed) timer = setTimeout(poll, 3000); };
+    timer = setTimeout(poll, 3000); return () => { disposed = true; clearTimeout(timer); };
+  }, [ready, loadSessions]);
+  useEffect(() => { setTitles([]); setTitleError(''); }, [environmentKey]);
+  useEffect(() => {
+    if (!agent || !ready || (!tabs.length && !sessions.length)) return;
+    const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined, loading = false;
+    const poll = async () => {
+      clearTimeout(timer); if (controller.signal.aborted || loading || document.hidden) return;
+      loading = true;
+      try {
+        const result = await api<History>(`/agents/${agent.id}/session-titles`, 'GET', undefined, controller.signal);
+        if (!controller.signal.aborted) { setTitles(result.items); setTitleError(result.warnings.join('；')); }
+      } catch (error) { if (!controller.signal.aborted) setTitleError(`标题同步失败：${errorText(error)}`); }
+      finally { loading = false; if (!controller.signal.aborted) timer = setTimeout(poll, 20000); }
+    };
+    void poll();
+    const visibility = () => { if (!document.hidden) void poll(); else clearTimeout(timer); };
+    document.addEventListener('visibilitychange', visibility);
+    return () => { controller.abort(); clearTimeout(timer); document.removeEventListener('visibilitychange', visibility); };
+  }, [environmentKey, titleKey, ready]);
+  const selectAgent = (id: string) => { setDialog(null); act(changeWorkspace({ action: 'agent', agentId: id })); };
+  const launch = async (input: { cwd?: string; historyId?: string }) => {
+    if (!agent || launching.current) return;
+    const agentId = agent.id; launching.current = true; setBusy(true);
+    try {
+      const session = await api<Session>('/sessions', 'POST', { agentId, ...input });
+      await loadSessions(); await changeWorkspace({ action: 'open', agentId, sessionId: session.id }); setDialog(null);
+    } finally { launching.current = false; setBusy(false); }
+  };
+  const selectTab = async (id: string) => {
+    if (!agent) return;
+    const tab = tabs.find(item => item.id === id);
+    await changeWorkspace({ action: 'select', agentId: agent.id, tabId: id });
+    if (tab?.agentSessionId && sameEnvironment(tab, agent) && tabSession(tab, agent, sessions)?.status !== 'running') await launch({ historyId: tab.agentSessionId });
+  };
+  useEffect(() => {
+    if (!ready || !agent || !active || !active.agentSessionId || !sameEnvironment(active, agent)) return;
+    const key = `${agent.id}:${active.id}`;
+    if (activeSession?.status === 'running') { activatedTabs.current.add(key); return; }
+    if (activatedTabs.current.has(key)) return;
+    activatedTabs.current.add(key);
+    act(launch({ historyId: active.agentSessionId }));
+  }, [ready, agent?.id, active?.id, activeSession?.status, environmentKey]);
+  const open = async (row: Conversation) => {
+    if (!agent) return;
+    const existing = tabs.find(tab => sameEnvironment(tab, agent) && (tab.agentSessionId ? tab.agentSessionId === (row.history?.id ?? row.session?.agentSessionId) : tab.sessionId === row.session?.id));
+    if (existing) { await selectTab(existing.id); setDialog(null); }
+    else if (row.session?.status === 'running' || (row.session && !row.history)) { await changeWorkspace({ action: 'open', agentId: agent.id, sessionId: row.session.id }); setDialog(null); }
+    else if (row.history) await launch({ historyId: row.history.id });
+  };
+  const removeAgent = async (item: Agent) => {
+    if (!confirm(`移除 Agent「${item.name}」的配置和 tabs？Agent 对话内容不受影响。`)) return;
+    await queue.current; await api(`/agents/${item.id}`, 'DELETE'); const data = await api<Config>('/config'); setConfig(data); setWorkspace(data.workspace);
+  };
+  const changedEnvironment = active && agent && !sameEnvironment(active, agent);
+  return <div className="workspace">
+    <a className="skip-link" href="#main">跳到终端区域</a>
+    <header className="appbar">
+      <span className="brand" role="img" aria-label="Agent Hub" title="Agent Hub"><img className="brand-light" src="/agent-hub-lockup-light.png" alt="" /><img className="brand-dark" src="/agent-hub-lockup-dark.png" alt="" /></span>
+      <div className="agent-controls" role="group" aria-label="Agent 选择与管理">
+        <label className="agent-switch"><span className="agent-select-control">{agent && <AgentIcon type={agent.type} size={17} />}<select aria-label="选择 Agent" value={agent?.id ?? ''} disabled={!ready || busy || !config.agents.length} onChange={event => selectAgent(event.target.value)}>{!config.agents.length && <option value="">未配置</option>}{config.agents.map(a => <option key={a.id} value={a.id}>{a.name} - {a.target}</option>)}</select></span></label>
+        <button className="manage-button" aria-label="管理 Agents" title="管理 Agents" disabled={!ready || busy} onClick={() => setManaging(true)}><span aria-hidden="true">+</span></button>
+      </div>
+      <label className="theme-switch"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="10" cy="10" r="3" /><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.35 4.35l1.42 1.42m8.46 8.46 1.42 1.42m0-11.3-1.42 1.42m-8.46 8.46-1.42 1.42" /></svg><select aria-label="颜色主题" value={theme} onChange={event => setTheme(event.target.value as ThemeName)}>{Object.entries(themes).map(([value, item]) => <option value={value} key={value}>{item.label}</option>)}</select></label>
+    </header>
+    <div className="tabbar">
+      <div className="tabs" role="tablist" aria-label="打开的对话">{tabs.map((tab, index) => {
+        const session = agent && tabSession(tab, agent, sessions), selected = active?.id === tab.id;
+        const status = session?.status === 'running' ? '活跃' : session ? '已退出' : '待恢复';
+        return <div className={`tab ${selected ? 'selected' : ''}`} key={tab.id}>
+          <button role="tab" id={`tab-${tab.id}`} aria-selected={selected} aria-controls="terminal-panel" tabIndex={selected || (!active && index === 0) ? 0 : -1} onClick={() => act(selectTab(tab.id))} title={`${titleFor(tab)}\n${tab.cwd}\n${status}`} onKeyDown={event => {
+            let next: number | undefined;
+            if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+            if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+            if (event.key === 'Home') next = 0;
+            if (event.key === 'End') next = tabs.length - 1;
+            if (next !== undefined) { event.preventDefault(); act(selectTab(tabs[next].id)); document.getElementById(`tab-${tabs[next].id}`)?.focus(); }
+          }}><span className={`state-icon ${session?.status === 'running' ? 'running' : ''}`} title={status} aria-hidden="true" /><span className="tab-title">{titleFor(tab)}</span><span className="sr-only">{status}</span></button>
+          <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，远程会话继续运行" onClick={() => agent && act(changeWorkspace({ action: 'close', agentId: agent.id, tabId: tab.id }))}>×</button>
+        </div>;
+      })}</div>
+      <div className="tab-actions"><button aria-label="添加对话" title="新建或打开对话" disabled={!agent || busy} onClick={() => setDialog('open')}>+</button></div>
+    </div>
+    <main id="main" className="main" tabIndex={-1}>
+      {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
+      {titleError && <p className="sync-warning">{titleError}</p>}
+      {active ? <section className="active-workspace" id="terminal-panel" role="tabpanel" aria-labelledby={`tab-${active.id}`}>
+        <div className="session-toolbar"><code title={active.cwd}>{active.cwd}</code></div>
+        {activeSession ? <Suspense fallback={<div className="loading">加载终端…</div>}><Terminal key={activeSession.id} sessionId={activeSession.id} theme={theme} /></Suspense> : <div className="empty-workspace"><h2>{titleFor(active)}</h2><p className="subtle">{changedEnvironment ? 'Agent 环境已更改，无法在当前环境恢复此 tab。' : active.agentSessionId ? busy ? '正在恢复 Agent 对话…' : 'Agent 对话暂未运行，点击当前 tab 可重试。' : '历史选择器没有可靠的对话标识，请重新打开对话。'}</p></div>}
+      </section> : agent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher key={agent.id} agent={agent} sessions={sessions} titles={titles} limit={config.historyLimit} busy={busy} onOpen={open} onStart={cwd => launch({ cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setModal(null)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
+    </main>
+    {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}
+    {modal !== undefined && <AgentForm agent={modal} onClose={() => setModal(undefined)} onSaved={saved => { setModal(undefined); act(api<Config>('/config').then(data => { setConfig(data); return changeWorkspace({ action: 'agent', agentId: saved.id }); })); }} />}
+    {dialog === 'open' && agent && <ConversationPicker key={agent.id} agent={agent} sessions={sessions} titles={titles} limit={config.historyLimit} busy={busy} onClose={() => setDialog(null)} onOpen={open} onStart={cwd => launch({ cwd })} />}
+  </div>;
+}
