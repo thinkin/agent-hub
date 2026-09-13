@@ -36,7 +36,10 @@ export class Session {
     this.info = { id: randomUUID(), agentId: agent.id, agentName: agent.name, type: agent.type, connection: agent.connection, target: agent.target, configDir: agent.configDir, initScriptKey: initScriptKey(agent), agentSessionId: plan.agentSessionId, cwd, status: 'running', created: Date.now() };
     this.terminal.loadAddon(this.serializer);
     this.process = factory(agent, plan.command, 100, 30);
-    if (plan.resolveSessionId) this.sessionIdReady = plan.resolveSessionId().then(id => { if (id && !this.disposed) this.info.agentSessionId = id; }).catch(() => {});
+    if (plan.resolveSessionId) this.sessionIdReady = plan.resolveSessionId().then(id => {
+      if (!id) throw new Error('无法确认新建 Agent 会话的 ID，请重试');
+      if (!this.disposed) this.info.agentSessionId = id;
+    });
     this.terminal.onData(data => {
       if (!this.viewer && !this.transportClosed && !this.disposed) this.process.write(data);
     });
@@ -131,6 +134,7 @@ export class Session {
 }
 export class Sessions {
   private sessions = new Map<string, Session>();
+  private creationQueues = new Map<string, Promise<unknown>>();
   constructor(private factory: TerminalFactory = spawnTerminal, private registry?: AgentRegistry) {}
   setRegistry(registry: AgentRegistry) { this.registry ??= registry; }
   list() {
@@ -146,11 +150,21 @@ export class Sessions {
     if (existing) return existing;
     if (this.list().length >= 30) throw new Error('会话数量已达 30，请先关闭闲置会话');
     if (!this.registry) throw new Error('Agent adapter registry 未配置');
-    const plan = await this.registry.for(agent).prepareLaunch(agent, cwd, agentSessionId, picker);
-    const session = new Session(agent, cwd, plan, this.factory);
-    this.sessions.set(session.info.id, session);
-    await session.waitForSessionId();
-    return session;
+    const key = JSON.stringify([agent.type, agent.connection, agent.target, agent.configDir, initScriptKey(agent)]);
+    const previous = this.creationQueues.get(key) ?? Promise.resolve();
+    const task = previous.then(async () => {
+      const duplicate = agentSessionId && this.find(agent, agentSessionId);
+      if (duplicate) return duplicate;
+      const plan = await this.registry!.for(agent).prepareLaunch(agent, cwd, agentSessionId, picker);
+      const session = new Session(agent, cwd, plan, this.factory);
+      this.sessions.set(session.info.id, session);
+      try { await session.waitForSessionId(); }
+      catch (error) { session.dispose(); this.sessions.delete(session.info.id); throw error; }
+      return session;
+    });
+    this.creationQueues.set(key, task);
+    task.finally(() => { if (this.creationQueues.get(key) === task) this.creationQueues.delete(key); }).catch(() => {});
+    return task;
   }
   close() { for (const session of this.sessions.values()) session.dispose(); this.sessions.clear(); }
 }

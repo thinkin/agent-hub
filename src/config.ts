@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, writeFile, chmod, unlink } from 'node:fs/promises';
-import { homedir, userInfo } from 'node:os';
+import { homedir, hostname, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -7,22 +7,29 @@ import { promisify } from 'node:util';
 import { z } from 'zod';
 
 const text = z.string().trim().min(1).max(1024).regex(/^[^\x00-\x1f\x7f]+$/, '不能包含控制字符');
-export const agentInput = z.object({
+const agentInputSchema = z.object({
   name: text.max(80),
   type: z.enum(['claude-code', 'codex', 'traex']).default('claude-code'),
   connection: z.enum(['ssh', 'local']).default('ssh'),
   target: text.max(255).regex(/^(?:[a-zA-Z0-9_][a-zA-Z0-9_.-]*@)?[a-zA-Z0-9_][a-zA-Z0-9_.:\[\]-]*$/, '请输入 SSH Host 别名或 user@host'),
   cwd: text.default('~'),
-  executable: text.default('claude'),
+  executable: text,
   configDir: z.union([z.literal(''), text]).default(''),
   initScript: z.string().max(8192).regex(/^[^\x00]*$/, '初始化脚本不能包含 NUL 字符').default(''),
 }).strict();
-export const agentSchema = agentInput.extend({ id: z.string().uuid() });
+function defaultExecutable(value: unknown) {
+  if (!value || typeof value !== 'object') return value;
+  const input = { ...value } as Record<string, unknown>;
+  if (!input.executable) input.executable = input.type === 'codex' ? 'codex' : input.type === 'traex' ? 'traex' : 'claude';
+  return input;
+}
+export const agentInput = z.preprocess(defaultExecutable, agentInputSchema);
+export const agentSchema = z.preprocess(defaultExecutable, agentInputSchema.extend({ id: z.string().uuid() }));
 export type Agent = z.infer<typeof agentSchema>;
 export function initScriptKey(agent: Agent) { return createHash('sha256').update(agent.initScript).digest('hex'); }
 export const tabSchema = z.object({
   id: z.string().uuid(), sessionId: z.string().uuid(), agentSessionId: z.string().uuid().optional(),
-  cwd: text, type: agentInput.shape.type, connection: agentInput.shape.connection, target: agentInput.shape.target, configDir: agentInput.shape.configDir,
+  cwd: text, type: agentInputSchema.shape.type, connection: agentInputSchema.shape.connection, target: agentInputSchema.shape.target, configDir: agentInputSchema.shape.configDir,
   initScriptKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 export const agentWorkspaceSchema = z.object({
@@ -58,7 +65,7 @@ const execFileAsync = promisify(execFile);
 export class ConfigStore {
   private state: Config = { version: 2, historyLimit: 30, agents: [], workspace: { selectedAgentId: null, agents: {} } };
   private queue: Promise<unknown> = Promise.resolve();
-  constructor(readonly directory = join(homedir(), '.multi-agent-mgr')) {}
+  constructor(readonly directory = join(homedir(), '.agent-hub')) {}
   async load() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await chmod(this.directory, 0o700);
@@ -91,16 +98,17 @@ export class ConfigStore {
 }
 
 const localAgents = [
-  { type: 'claude-code' as const, name: 'Local Claude', command: 'claude' },
-  { type: 'codex' as const, name: 'Local Codex', command: 'codex' },
-  { type: 'traex' as const, name: 'Local TraeX', command: 'traex' },
+  { type: 'claude-code' as const, legacyName: 'Local Claude', suffix: 'Claude', command: 'claude' },
+  { type: 'codex' as const, legacyName: 'Local Codex', suffix: 'Codex', command: 'codex' },
+  { type: 'traex' as const, legacyName: 'Local TraeX', suffix: 'TraeX', command: 'traex' },
 ];
 export async function ensureLocalAgents(store: ConfigStore, findExecutable: (command: string) => Promise<string> = async command => {
   const { stdout } = await execFileAsync('/bin/bash', ['-lc', `command -v ${command}`], { encoding: 'utf8' });
   return stdout.trim();
 }) {
   const username = userInfo().username;
-  const discovered: Array<{ type: Agent['type']; name: string; executable: string }> = [];
+  const machine = hostname();
+  const discovered: Array<{ type: Agent['type']; legacyName: string; suffix: string; executable: string }> = [];
   for (const candidate of localAgents) {
     try { const executable = await findExecutable(candidate.command); if (executable) discovered.push({ ...candidate, executable }); } catch {}
   }
@@ -110,13 +118,14 @@ export async function ensureLocalAgents(store: ConfigStore, findExecutable: (com
     for (const candidate of discovered) {
       const existing = config.agents.find(agent => agent.type === candidate.type && agent.connection === 'local');
       if (existing) {
+        if (existing.name === candidate.legacyName) { existing.name = `${machine} ${candidate.suffix}`; changed = true; }
         if (existing.target !== username) {
           const previousTarget = existing.target; existing.target = username; changed = true;
           for (const tab of config.workspace.agents[existing.id]?.tabs ?? []) if (tab.connection === 'local' && tab.target === previousTarget) tab.target = username;
         }
         continue;
       }
-      const agent = agentSchema.parse({ id: randomUUID(), name: candidate.name, type: candidate.type, connection: 'local', target: username, cwd: '~', executable: candidate.executable, configDir: '', initScript: '' });
+      const agent = agentSchema.parse({ id: randomUUID(), name: `${machine} ${candidate.suffix}`, type: candidate.type, connection: 'local', target: username, cwd: '~', executable: candidate.executable, configDir: '', initScript: '' });
       additions.push(agent); config.workspace.selectedAgentId ??= agent.id; changed = true;
     }
     config.agents.unshift(...additions);

@@ -55,7 +55,7 @@ node dist/cli.js start --no-open
 
 ### 本地 Agent 与注册远程 Agent
 
-启动时会通过当前 CLI 的登录 Shell 检测 `claude`、`codex` 和 `traex`。检测成功后，会按需创建 `Local Claude`、`Local Codex` 与 `Local TraeX`：
+启动时会通过当前 CLI 的登录 Shell 检测 `claude`、`codex` 和 `traex`。检测成功后，会按需创建 `<hostname> Claude`、`<hostname> Codex` 与 `<hostname> TraeX`；旧的默认名称 `Local ...` 会自动更新，用户自定义名称保持不变：
 
 - 直接在本机启动 PTY，不经过 SSH；
 - 自动使用检测到的 CLI 可执行文件绝对路径，并在选择器中显示当前系统用户名；
@@ -95,10 +95,11 @@ export CLAUDE_CONFIG_DIR="$HOME/.claude-work"
 
 ## 对话与生命周期
 
-- 顶部选择 Agent；每个 Agent 有独立的全宽 tabs 工作区。没有 tab 时，主区域直接显示对话入口；新建或打开已有对话后添加 tab。
+- 顶部选择 Agent；下拉菜单按本机或 SSH 目标分组，每个选项显示对应 CLI 图标。每个 Agent 有独立的全宽 tabs 工作区。没有 tab 时，主区域直接显示对话入口；新建或打开已有对话后添加 tab。
 - tab 栏只有一个 `+` 入口，点击后打开与空工作区相同的对话入口：左侧按工作目录新建，右侧选择运行会话和远程历史，支持按已加载的标题、目录搜索及加载更多；重复打开定位到已有 tab。
 - tabs 保持打开顺序，支持左右方向键、Home / End 切换；当前 Agent、各 Agent 的 tabs 和选中项持久化到本地配置。
 - 右上角可切换深色现代、浅色现代、Solarized Dark 和 Monokai；选择保存在当前浏览器，并同步应用到终端配色。
+- Claude 使用项目内的品牌标识，Codex 与 TraeX 使用产品提供的内嵌 WebP 图标，不依赖开发机应用安装路径。
 - 浅蓝实心圆点表示本地管理器跟踪的进程仍活跃，灰色空心圆点表示历史或已退出；悬停可查看状态。
 - “活跃”不等于模型正在思考，也不是远程全机进程监控。
 - 标题优先使用对应 CLI 的 thread/session 标题；Claude 缺少标题时使用首条有效用户消息摘要。没有摘要时显示“新对话”，工作目录仅作副信息。
@@ -112,11 +113,11 @@ export CLAUDE_CONFIG_DIR="$HOME/.claude-work"
 
 ## 存储与安全
 
-本地持久化目录：`~/.multi-agent-mgr/`。
+本地持久化目录：`~/.agent-hub/`。
 
 | 数据 | 位置 |
 | --- | --- |
-| Agent 配置、历史分页数量、各 Agent 的 tabs 和选中项 | `~/.multi-agent-mgr/config.json` |
+| Agent 配置、历史分页数量、各 Agent 的 tabs 和选中项 | `~/.agent-hub/config.json` |
 | 本地或 SSH PTY、终端屏幕与有限滚动缓冲 | CLI 内存 |
 | 临时历史摘要缓存 | CLI / 浏览器内存 |
 | Agent 对话正文 | 对应 CLI 自身的配置或会话目录 |

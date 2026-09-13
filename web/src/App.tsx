@@ -12,10 +12,48 @@ const emptyWorkspace: Workspace = { selectedAgentId: null, agents: {} };
 const emptyHistory: History = { items: [], total: 0, warnings: [] };
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function timestamp(value: number) { return new Date(value).toLocaleDateString([], { month: '2-digit', day: '2-digit' }); }
-function AgentIcon({ type, size = 18 }: { type: Agent['type']; size?: number }) {
-  if (type === 'claude-code') return <span className="agent-icon claude-icon" title="Claude Code"><svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.25v19.5M2.25 12h19.5M5.1 5.1l13.8 13.8M18.9 5.1 5.1 18.9M8.27 2.98l7.46 18.04M21.02 8.27 2.98 15.73M15.73 2.98 8.27 21.02M2.98 8.27l18.04 7.46" /></svg><span className="sr-only">Claude Code</span></span>;
-  if (type === 'codex') return <span className="agent-icon codex-icon" title="Codex"><img className="codex-dark" src="/codex-icon-dark.png" width={size} height={size} alt="" /><img className="codex-light" src="/codex-icon-light.png" width={size} height={size} alt="" /><span className="sr-only">Codex</span></span>;
-  return <span className="agent-icon traex-icon" title="TraeX"><img src="/traex-icon.svg" width={size} height={size} alt="" /><span className="sr-only">TraeX</span></span>;
+function AgentIcon({ type, size = 18, labelled = true }: { type: Agent['type']; size?: number; labelled?: boolean }) {
+  if (type === 'claude-code') return <span className="agent-icon claude-icon" title={labelled ? 'Claude Code' : undefined} aria-hidden={labelled ? undefined : true}><svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.25v19.5M2.25 12h19.5M5.1 5.1l13.8 13.8M18.9 5.1 5.1 18.9M8.27 2.98l7.46 18.04M21.02 8.27 2.98 15.73M15.73 2.98 8.27 21.02M2.98 8.27l18.04 7.46" /></svg>{labelled && <span className="sr-only">Claude Code</span>}</span>;
+  if (type === 'codex') return <span className="agent-icon codex-icon" title={labelled ? 'Codex' : undefined} aria-hidden={labelled ? undefined : true}><img className="codex-dark" src="/codex-icon-dark.png" width={size} height={size} alt="" /><img className="codex-light" src="/codex-icon-light.png" width={size} height={size} alt="" />{labelled && <span className="sr-only">Codex</span>}</span>;
+  return <span className="agent-icon traex-icon" title={labelled ? 'TraeX' : undefined} aria-hidden={labelled ? undefined : true}><img src="/traex-icon.png" width={size} height={size} alt="" />{labelled && <span className="sr-only">TraeX</span>}</span>;
+}
+
+function AgentSwitcher({ agents, selected, disabled, onSelect }: { agents: Agent[]; selected?: Agent; disabled: boolean; onSelect(id: string): void }) {
+  const [open, setOpen] = useState(false);
+  const [focused, setFocused] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const groups = new Map<string, { label: string; agents: Agent[] }>();
+  for (const agent of agents) {
+    const key = `${agent.connection}:${agent.target}`;
+    const group = groups.get(key) ?? { label: agent.connection === 'local' ? `本机 · ${agent.target}` : `SSH · ${agent.target}`, agents: [] };
+    group.agents.push(agent); groups.set(key, group);
+  }
+  const orderedGroups = [...groups.entries()].sort(([, left], [, right]) => Number(right.agents[0].connection === 'local') - Number(left.agents[0].connection === 'local'));
+  const orderedAgents = orderedGroups.flatMap(([, group]) => group.agents);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [open]);
+  const choose = (agent: Agent) => { setOpen(false); onSelect(agent.id); };
+  const keyDown = (event: React.KeyboardEvent) => {
+    if (event.key === 'Escape') { setOpen(false); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    if (!open) { setOpen(true); setFocused(Math.max(0, orderedAgents.findIndex(item => item.id === selected?.id))); return; }
+    if (event.key === 'ArrowDown') setFocused(value => (value + 1) % orderedAgents.length);
+    else if (event.key === 'ArrowUp') setFocused(value => (value + orderedAgents.length - 1) % orderedAgents.length);
+    else if (event.key === 'Home') setFocused(0);
+    else if (event.key === 'End') setFocused(orderedAgents.length - 1);
+    else if (orderedAgents[focused]) choose(orderedAgents[focused]);
+  };
+  return <div className="agent-switcher" ref={root}>
+    <button type="button" className="agent-switch-button" role="combobox" aria-label="选择 Agent" aria-expanded={open} aria-controls="agent-options" aria-activedescendant={open && orderedAgents[focused] ? `agent-option-${orderedAgents[focused].id}` : undefined} disabled={disabled} onClick={() => { setFocused(Math.max(0, orderedAgents.findIndex(item => item.id === selected?.id))); setOpen(value => !value); }} onKeyDown={keyDown}>
+      {selected ? <><AgentIcon type={selected.type} size={18} labelled={false} /><span>{selected.name} - {selected.target}</span></> : <span>未配置</span>}<span className="agent-chevron" aria-hidden="true">⌄</span>
+    </button>
+    {open && <div className="agent-menu" id="agent-options" role="listbox" aria-label="Agents">{orderedGroups.map(([key, group]) => <div className="agent-group" role="group" aria-label={group.label} key={key}><div className="agent-group-label">{group.label}</div>{group.agents.map(item => { const index = orderedAgents.indexOf(item); return <button id={`agent-option-${item.id}`} type="button" role="option" aria-selected={item.id === selected?.id} className={`agent-option ${index === focused ? 'focused' : ''}`} key={item.id} onMouseEnter={() => setFocused(index)} onClick={() => choose(item)}><AgentIcon type={item.type} size={19} labelled={false} /><span>{item.name}</span>{item.id === selected?.id && <span className="agent-check" aria-hidden="true">✓</span>}</button>; })}</div>)}</div>}
+  </div>;
 }
 
 function AgentForm({ agent, onClose, onSaved }: { agent: Agent | null; onClose(): void; onSaved(agent: Agent): void }) {
@@ -215,7 +253,7 @@ export default function App() {
     <header className="appbar">
       <span className="brand" role="img" aria-label="Agent Hub" title="Agent Hub"><img className="brand-light" src="/agent-hub-lockup-light.png" alt="" /><img className="brand-dark" src="/agent-hub-lockup-dark.png" alt="" /></span>
       <div className="agent-controls" role="group" aria-label="Agent 选择与管理">
-        <label className="agent-switch"><span className="agent-select-control">{agent && <AgentIcon type={agent.type} size={17} />}<select aria-label="选择 Agent" value={agent?.id ?? ''} disabled={!ready || busy || !config.agents.length} onChange={event => selectAgent(event.target.value)}>{!config.agents.length && <option value="">未配置</option>}{config.agents.map(a => <option key={a.id} value={a.id}>{a.name} - {a.target}</option>)}</select></span></label>
+        <AgentSwitcher agents={config.agents} selected={agent} disabled={!ready || busy || !config.agents.length} onSelect={selectAgent} />
         <button className="manage-button" aria-label="管理 Agents" title="管理 Agents" disabled={!ready || busy} onClick={() => setManaging(true)}><span aria-hidden="true">+</span></button>
       </div>
       <label className="theme-switch"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="10" cy="10" r="3" /><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.35 4.35l1.42 1.42m8.46 8.46 1.42 1.42m0-11.3-1.42 1.42m-8.46 8.46-1.42 1.42" /></svg><select aria-label="颜色主题" value={theme} onChange={event => setTheme(event.target.value as ThemeName)}>{Object.entries(themes).map(([value, item]) => <option value={value} key={value}>{item.label}</option>)}</select></label>

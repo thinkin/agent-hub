@@ -52,7 +52,12 @@ export default function Terminal({ sessionId, theme }: { sessionId: string; them
     });
     const observer = new ResizeObserver(resize); observer.observe(host.current!);
     connect();
-    return () => { disposed = true; terminalRef.current = null; clearTimeout(reconnect); observer.disconnect(); input.dispose(); ws.close(); terminal.dispose(); };
+    return () => {
+      disposed = true; terminalRef.current = null; clearTimeout(reconnect); observer.disconnect(); input.dispose();
+      if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => ws.close();
+      else if (ws.readyState === WebSocket.OPEN) ws.close();
+      terminal.dispose();
+    };
   }, [sessionId, attempt]);
   useEffect(() => { if (terminalRef.current) terminalRef.current.options.theme = themes[theme].terminal; }, [theme]);
   return <div className="terminal-panel">

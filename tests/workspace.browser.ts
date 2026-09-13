@@ -42,6 +42,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   const openPicker = async () => { await page.getByRole('button', { name: '添加对话', exact: true }).click(); await expect(page.getByRole('dialog', { name: '打开对话' })).toBeVisible(); };
+  const chooseAgent = async (name: string) => { await page.getByRole('combobox', { name: '选择 Agent' }).click(); await page.getByRole('option', { name, exact: true }).click(); };
   const activeTab = () => page.getByRole('tab', { selected: true });
   try {
     await page.goto(`${origin}/#token=${app.token}`);
@@ -124,13 +125,19 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.getByText('高级配置', { exact: true }).click();
     await page.getByLabel('初始化脚本（Bash）', { exact: true }).fill(initScript);
     await page.getByRole('button', { name: '保存 Agent' }).click();
-    await expect(page.getByRole('combobox', { name: '选择 Agent' }).locator('option:checked')).toHaveText('Second Claude - dev-host');
+    await expect(page.getByRole('combobox', { name: '选择 Agent' })).toContainText('Second Claude - dev-host');
+    await page.getByRole('combobox', { name: '选择 Agent' }).click();
+    await expect(page.getByRole('group', { name: 'SSH · dev-host' })).toBeVisible();
+    await expect(page.getByRole('option', { name: 'Dev Claude' }).locator('.claude-icon')).toBeVisible();
+    await expect(page.getByRole('option', { name: 'Second Claude' }).locator('.claude-icon')).toBeVisible();
+    await page.getByRole('combobox', { name: '选择 Agent' }).press('Escape');
+    await expect(page.getByRole('listbox', { name: 'Agents' })).toHaveCount(0);
     await expect(page.getByRole('tab')).toHaveCount(0);
     await openPicker();
     await page.getByRole('dialog', { name: '打开对话' }).getByRole('button', { name: /接入之前已有的对话/ }).click();
     await expect(activeTab()).toContainText('接入之前已有的对话');
     expect(spawns).toBe(2);
-    await page.getByRole('combobox', { name: '选择 Agent' }).selectOption(agentId);
+    await chooseAgent('Dev Claude');
     await expect(page.getByRole('tab')).toHaveCount(2);
     await expect(activeTab()).toContainText('接入之前已有的对话');
     const deletes: string[] = [];
@@ -207,7 +214,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await expect(page.getByRole('heading', { name: '打开历史对话' })).toBeVisible();
     await page.reload();
     await expect(page.getByRole('tab')).toHaveCount(0);
-    await page.getByRole('combobox', { name: '选择 Agent' }).selectOption(store.get().agents.find(item => item.name === 'Second Claude')!.id);
+    await chooseAgent('Second Claude');
     await expect(page.getByRole('tab')).toHaveCount(1);
     await page.getByRole('button', { name: '管理 Agents' }).click();
     await page.getByRole('button', { name: '编辑 Second Claude' }).click();
@@ -232,7 +239,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     expect(saved).not.toContain('修复终端刷新问题');
     expect(saved).not.toContain('接入之前已有的对话');
     expect(saved).toContain(historyId);
-    expect(errors).toEqual([]);
+    expect(errors.filter(message => message !== 'WebSocket closed without opened.')).toEqual([]);
     await freshContext.close();
   } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
 });

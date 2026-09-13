@@ -6,17 +6,18 @@
 
 - 这是薄的本地/远程 Agent 终端管理器，不是重新实现某个 CLI 对话 UI 的聊天客户端。
 - 本地 CLI 持有本地或 SSH PTY；浏览器通过 WebSocket 操作 xterm.js。
-- CLI 启动时检测本机 `claude`、`codex`、`traex`，若存在则确保有对应 Local Agent；本地执行必须绕过 SSH。
+- CLI 启动时检测本机 `claude`、`codex`、`traex`，若存在则确保有对应 `<hostname> <Agent>`；仅迁移精确匹配 `Local ...` 的旧默认名称，用户自定义名称不得覆盖。本地执行必须绕过 SSH。
 - Agent 类型通过 `AgentAdapter` 和 `AgentRegistry` 统一封装；当前实现 Claude Code、Codex 和 TraeX。服务/API 层不得硬编码某个 CLI 的参数或历史路径。
 - `AgentAdapter` 负责探测、历史读取、启动命令和恢复命令；`AgentRegistry` 是唯一类型分派入口。新增 CLI 时必须实现适配器并注册，不能在 `server.ts` 或 `sessions.ts` 增加类型分支。
 - Claude 和 TraeX 可在启动前分配 session ID；Codex 不支持 `--session-id`，新会话启动后从 thread 索引回填 ID。不得假设所有 CLI 都有相同参数。
 - 不使用 tmux，不部署远程守护服务，不在本地持久化对话正文或终端录像。
-- `~/.multi-agent-mgr/config.json` 只保存 Agent 配置、展示设置和工作区恢复元数据；禁止将标题缓存、回复、提示词写进去。
+- `~/.agent-hub/config.json` 只保存 Agent 配置、展示设置和工作区恢复元数据；禁止将标题缓存、回复、提示词写进去。目录迁移属于用户环境的一次性运维操作，不写入产品启动逻辑。
 
 ## 界面约定
 
 - 保持克制的开发工具风格：中性深灰、等宽字体、细分隔线；不要增加营销文案、大幅标题、渐变或装饰卡片。
 - 顶部使用简洁终端图标；Agent 选择与管理图标紧邻，配置操作仍放独立对话框。
+- Agent 选择器使用自定义 combobox，按 `local:<username>` 或 `ssh:<target>` 分组；键盘焦点顺序必须与分组后的视觉顺序一致，并维护 `aria-activedescendant`。
 - 左上角使用 Agent Hub 品牌图标；浅色和深色主题分别使用黑色、白色外围节点版本。
 - 不显示底部状态栏、排序说明、分页大小控件或原生终端说明文案；保留按需加载更多。
 - 主界面采用全宽 tabs，不保留左侧对话列表；tab 栏仅保留一个 + 入口。统一对话入口采用左侧新建、右侧活跃会话与远程历史的双栏布局；没有 tab 时直接在主区域显示同一入口。
@@ -51,7 +52,7 @@
 - 配置目录按类型映射：Claude Code 使用 `CLAUDE_CONFIG_DIR`，Codex 使用 `CODEX_HOME`，TraeX 使用 `TRAECLI_HOME`。
 - Claude 历史来自项目 JSONL；Codex 与 TraeX 历史来自各自 `state_5.sqlite` 的 `threads` 表，查询必须只读、分页且限制返回量。
 - Web PTY 必须移除 `NO_COLOR` / `FORCE_COLOR`，声明 `TERM=xterm-256color`、`COLORTERM=truecolor`、`TERM_PROGRAM=AgentHub`；xterm 主题必须提供完整 ANSI 16 色。
-- Codex 与 TraeX 的 UI 图标使用仓库内已复制的官方应用资源，不使用临时手绘近似图标；新增静态资源时确保生产构建会复制。
+- Codex 与 TraeX 的 UI 图标由 `scripts/prepare-agent-icons.py` 从产品提供的 28px WebP 去除烘焙背景后生成透明 PNG；不使用手绘近似图标或依赖开发机应用资源。
 - 初始化脚本指纹参与环境匹配和缓存隔离；脚本明文只保存在 Agent 配置，不复制到 tabs，不在日志或错误中额外输出脚本。
 - 不记录 token、Cookie、SSH 密钥、对话正文；测试使用临时目录和合成数据。
 - 不创建无关文档或冗长注释；在改动影响操作方式时同步 README。

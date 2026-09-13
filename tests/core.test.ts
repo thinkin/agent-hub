@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, stat, mkdir, writeFile, utimes } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -33,6 +33,21 @@ test('configuration is atomic, private, metadata-only and serializes concurrent 
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
+test('legacy config migrates session metadata and keeps type-specific executable defaults', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mam-migrate-'));
+  const agentId = randomUUID(), tabId = randomUUID(), legacySessionId = randomUUID();
+  try {
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'config.json'), JSON.stringify({ version: 1, historyLimit: 30, agents: [{ id: agentId, name: 'Legacy', target: 'host', cwd: '~', executable: 'claude', configDir: '', initScript: '' }], workspace: { selectedAgentId: agentId, agents: { [agentId]: { tabs: [{ id: tabId, sessionId: randomUUID(), claudeId: legacySessionId, cwd: '~', target: 'host', configDir: '' }], activeTabId: tabId } } } }));
+    const config = (await new ConfigStore(directory).load()).get();
+    assert.equal(config.version, 2);
+    assert.equal(config.workspace.agents[agentId].tabs[0].agentSessionId, legacySessionId);
+    assert.equal(config.workspace.agents[agentId].tabs[0].type, 'claude-code');
+    assert.equal(agentInput.parse({ name: 'Codex', type: 'codex', target: 'host' }).executable, 'codex');
+    assert.equal(agentInput.parse({ name: 'TraeX', type: 'traex', target: 'host' }).executable, 'traex');
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 test('startup discovers Claude, Codex and TraeX once with type-specific executables', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mam-local-agents-'));
   try {
@@ -40,7 +55,7 @@ test('startup discovers Claude, Codex and TraeX once with type-specific executab
     const paths: Record<string, string> = { claude: '/bin/claude', codex: '/bin/codex', traex: '/bin/traex' };
     assert.equal(await ensureLocalAgents(store, async command => paths[command]), true);
     assert.deepEqual(store.get().agents.map(item => [item.type, item.name, item.executable]), [
-      ['claude-code', 'Local Claude', '/bin/claude'], ['codex', 'Local Codex', '/bin/codex'], ['traex', 'Local TraeX', '/bin/traex'],
+      ['claude-code', `${hostname()} Claude`, '/bin/claude'], ['codex', `${hostname()} Codex`, '/bin/codex'], ['traex', `${hostname()} TraeX`, '/bin/traex'],
     ]);
     assert.equal(await ensureLocalAgents(store, async command => paths[command]), false);
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -56,7 +71,7 @@ test('local discovery preserves SSH configuration and migrates local target meta
     assert.equal(await ensureLocalAgents(store, find), false);
     const config = store.get();
     assert.equal(config.agents.length, 2);
-    assert.deepEqual(config.agents[0], { id: config.agents[0].id, name: 'Local Claude', type: 'claude-code', connection: 'local', target: userInfo().username, cwd: '~', executable: '/opt/bin/claude', configDir: '', initScript: '' });
+    assert.deepEqual(config.agents[0], { id: config.agents[0].id, name: `${hostname()} Claude`, type: 'claude-code', connection: 'local', target: userInfo().username, cwd: '~', executable: '/opt/bin/claude', configDir: '', initScript: '' });
     assert.equal(config.agents[1].connection, 'ssh');
     assert.equal(config.workspace.selectedAgentId, config.agents[0].id);
     assert.equal(await runRemote(config.agents[0], 'printf local-direct'), 'local-direct');
