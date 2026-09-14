@@ -57,4 +57,26 @@ export abstract class BaseAgentAdapter implements AgentAdapter {
   }
 
   close() { this.controller.abort(); this.cache.clear(); }
+
+  // Codex and TraeX generate their own thread id and only persist it after the first
+  // user message, so a launched session has no id up front. Poll history until a new
+  // thread for this cwd appears, then adopt its id. Never throws — an unresolved id just
+  // leaves the session without a title/resume handle until the user actually talks.
+  protected async trackNewThread(agent: Agent, cwd: string, signal: AbortSignal) {
+    const list = async () => {
+      try { return (await this.history(agent, 0, 100, true)).items; }
+      catch { return undefined; }
+    };
+    const before = new Set((await list())?.map(item => item.id));
+    while (!signal.aborted) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      if (signal.aborted) return undefined;
+      const items = await list();
+      if (!items) continue;
+      const candidates = items.filter(item => !before.has(item.id));
+      const found = candidates.find(item => item.cwd === cwd) ?? (candidates.length === 1 ? candidates[0] : undefined);
+      if (found) return found.id;
+    }
+    return undefined;
+  }
 }

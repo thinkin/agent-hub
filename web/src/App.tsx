@@ -251,8 +251,11 @@ export default function App() {
   const launcherAgent = config.agents.find(a => a.id === launcherAgentId) ?? config.agents[0];
   const tabAgentIds = [...new Set(tabs.map(t => t.agentId))].filter(id => config.agents.some(a => a.id === id));
   const tabAgentKey = [...tabAgentIds].sort().join(',');
-  const titleKey = JSON.stringify([tabs.map(t => [t.agentId, t.agentSessionId]), sessions.map(s => [s.id, s.status])]);
-  const titleFor = (tab: WorkspaceTab) => titles[tab.agentId]?.find(item => item.id === tab.agentSessionId)?.title || (tab.agentSessionId ? '新对话' : '历史选择器');
+  const titleKey = JSON.stringify([tabs.map(t => [t.agentId, t.agentSessionId]), sessions.map(s => [s.id, s.status, s.agentSessionId])]);
+  // Codex/TraeX mint their thread id after the first message, so a new tab starts without one;
+  // fall back to the id its live session has backfilled so titles resolve before it is persisted.
+  const resolvedSessionId = (tab: WorkspaceTab) => { const a = agentOf(tab); return tab.agentSessionId ?? (a ? tabSession(tab, a, sessions)?.agentSessionId : undefined); };
+  const titleFor = (tab: WorkspaceTab) => { const id = resolvedSessionId(tab); return titles[tab.agentId]?.find(item => item.id === id)?.title || '新对话'; };
   useEffect(() => { applyTheme(theme); }, [theme]);
   useEffect(() => {
     const tab = active && document.getElementById(`tab-${active.id}`)?.parentElement;

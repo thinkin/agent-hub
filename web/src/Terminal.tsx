@@ -33,7 +33,7 @@ export default function Terminal({ sessionId, theme }: { sessionId: string; them
           terminal.reset(); terminal.resize(message.cols, message.rows);
           terminal.write(message.data, () => {
             if (disposed) return;
-            ready = true; resize(); terminal.focus();
+            ready = true; resize(); terminal.scrollToBottom(); terminal.focus();
             setState(message.status === 'exited' ? 'Agent 进程已退出' : '已连接');
           });
         } else if (message.type === 'output') terminal.write(message.data);

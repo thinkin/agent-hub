@@ -65,8 +65,8 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
         const session = sessions.get(input.sessionId);
         if (!session || session.isDisposed() || session.info.type !== agent.type || session.info.connection !== agent.connection || session.info.target !== agent.target || session.info.configDir !== agent.configDir || session.info.initScriptKey !== initScriptKey(agent)) throw new Error('会话不属于当前 Agent 环境');
         const info = session.info;
-        let tab = workspace.tabs.find(t => t.agentId === agent.id && t.type === info.type && t.connection === info.connection && t.target === info.target && t.configDir === info.configDir && (t.initScriptKey ?? initScriptKey({ ...agent, initScript: '' })) === info.initScriptKey && (info.agentSessionId ? t.agentSessionId === info.agentSessionId : t.sessionId === info.id));
-        if (tab) tab.sessionId = info.id;
+        let tab = workspace.tabs.find(t => t.agentId === agent.id && t.type === info.type && t.connection === info.connection && t.target === info.target && t.configDir === info.configDir && (t.initScriptKey ?? initScriptKey({ ...agent, initScript: '' })) === info.initScriptKey && (t.sessionId === info.id || (!!info.agentSessionId && t.agentSessionId === info.agentSessionId)));
+        if (tab) { tab.sessionId = info.id; if (info.agentSessionId) tab.agentSessionId = info.agentSessionId; }
         else {
           if (workspace.tabs.length >= 20) throw new Error('已达到 20 个 tab 上限，请先关闭一些对话');
           tab = { id: randomUUID(), agentId: agent.id, sessionId: info.id, agentSessionId: info.agentSessionId, cwd: info.cwd, type: info.type, connection: info.connection, target: info.target, configDir: info.configDir, initScriptKey: info.initScriptKey };

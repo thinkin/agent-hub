@@ -9,7 +9,7 @@
 - CLI 启动时检测本机 `claude`、`codex`、`traex`，若存在则确保有对应 `<hostname> <Agent>`；仅迁移精确匹配 `Local ...` 的旧默认名称，用户自定义名称不得覆盖。本地执行必须绕过 SSH。
 - Agent 类型通过 `AgentAdapter` 和 `AgentRegistry` 统一封装；当前实现 Claude Code、Codex 和 TraeX。服务/API 层不得硬编码某个 CLI 的参数或历史路径。
 - `AgentAdapter` 负责探测、历史读取、启动命令和恢复命令；`AgentRegistry` 是唯一类型分派入口。新增 CLI 时必须实现适配器并注册，不能在 `server.ts` 或 `sessions.ts` 增加类型分支。
-- Claude 和 TraeX 可在启动前分配 session ID；Codex 不支持 `--session-id`，新会话启动后从 thread 索引回填 ID。不得假设所有 CLI 都有相同参数。
+- Claude 可在启动前分配 session ID；Codex 与 TraeX 由 CLI 自行生成 thread ID 且仅在首条用户消息后落库，新会话启动后从 thread 索引持续回填 ID。回填在后台进行，不阻塞启动、失败不报错。不得假设所有 CLI 都有相同参数。
 - 不使用 tmux，不部署远程守护服务，不在本地持久化对话正文或终端录像。
 - `~/.agent-hub/config.json` 只保存 Agent 配置、展示设置和工作区恢复元数据；禁止将标题缓存、回复、提示词写进去。目录迁移属于用户环境的一次性运维操作，不写入产品启动逻辑。
 

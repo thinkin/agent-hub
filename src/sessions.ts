@@ -31,15 +31,16 @@ export class Session {
   private stopping = false;
   private transportClosed = false;
   private idleTimer?: NodeJS.Timeout;
-  private sessionIdReady: Promise<void> = Promise.resolve();
+  private idController = new AbortController();
   constructor(agent: Agent, cwd: string, plan: LaunchPlan, factory: TerminalFactory) {
     this.info = { id: randomUUID(), agentId: agent.id, agentName: agent.name, type: agent.type, connection: agent.connection, target: agent.target, configDir: agent.configDir, initScriptKey: initScriptKey(agent), agentSessionId: plan.agentSessionId, cwd, status: 'running', created: Date.now() };
     this.terminal.loadAddon(this.serializer);
     this.process = factory(agent, plan.command, 100, 30);
-    if (plan.resolveSessionId) this.sessionIdReady = plan.resolveSessionId().then(id => {
-      if (!id) throw new Error('无法确认新建 Agent 会话的 ID，请重试');
-      if (!this.disposed) this.info.agentSessionId = id;
-    });
+    // Adopt the agent-minted thread id in the background; the terminal is usable immediately
+    // whether or not the id ever resolves, so a slow first message never blocks or fails launch.
+    if (plan.resolveSessionId) plan.resolveSessionId(this.idController.signal).then(id => {
+      if (id && !this.disposed) this.info.agentSessionId = id;
+    }).catch(() => {});
     this.terminal.onData(data => {
       if (!this.viewer && !this.transportClosed && !this.disposed) this.process.write(data);
     });
@@ -121,10 +122,9 @@ export class Session {
     this.idleTimer.unref();
   }
   isDisposed() { return this.disposed; }
-  async waitForSessionId() { await this.sessionIdReady; }
   dispose() {
     if (this.disposed) return;
-    this.stop(); this.disposed = true;
+    this.stop(); this.disposed = true; this.idController.abort();
     this.info.status = 'exited';
     this.attaching?.close(4004, 'Session closed'); this.attaching = undefined;
     clearTimeout(this.timer); clearTimeout(this.idleTimer);
@@ -158,8 +158,6 @@ export class Sessions {
       const plan = await this.registry!.for(agent).prepareLaunch(agent, cwd, agentSessionId, picker);
       const session = new Session(agent, cwd, plan, this.factory);
       this.sessions.set(session.info.id, session);
-      try { await session.waitForSessionId(); }
-      catch (error) { session.dispose(); this.sessions.delete(session.info.id); throw error; }
       return session;
     });
     this.creationQueues.set(key, task);

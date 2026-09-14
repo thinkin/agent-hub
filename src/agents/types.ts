@@ -8,7 +8,7 @@ export type HistoryResult = z.infer<typeof historyResult>;
 export interface LaunchPlan {
   command: string;
   agentSessionId?: string;
-  resolveSessionId?: () => Promise<string | undefined>;
+  resolveSessionId?: (signal: AbortSignal) => Promise<string | undefined>;
 }
 
 export interface AgentAdapter {

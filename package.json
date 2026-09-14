@@ -1,6 +1,6 @@
 {
   "name": "@evanginx/agent-hub",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Agent Hub: a lightweight terminal workspace for local and remote coding agents",
   "repository": {
     "type": "git",

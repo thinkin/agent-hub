@@ -71,10 +71,14 @@ h1, h2, p { margin-top: 0; }
 .tabs { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; overflow-x: auto; padding: 4px 6px; }
 .tabs::-webkit-scrollbar { height: 3px; }
 /* Each agent's tabs share one group, wrapped by a color band (hue set inline per agent) so they read as a set. */
-.tab-group { display: flex; flex-shrink: 0; align-items: stretch; border: 1px solid var(--agent-band, var(--border)); border-radius: 6px; overflow: hidden; }
+.tab-group { display: flex; flex-shrink: 0; align-items: stretch; border: 1px solid var(--agent-band, var(--border)); border-radius: 6px; overflow: visible; }
 .tab { position: relative; display: flex; flex-shrink: 0; max-width: 240px; color: var(--muted); }
 .tab + .tab { border-left: 1px solid var(--border); }
-.tab.selected { color: var(--strong); background: color-mix(in srgb, var(--agent-band) 22%, transparent); font-weight: 500; }
+.tab.selected { color: var(--strong); background: color-mix(in srgb, var(--agent-band) 40%, var(--surface)); font-weight: 600; }
+/* A solid agent-band bar under the selected tab makes the active workspace unambiguous without relying on the fill alone. */
+.tab.selected::after { content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 2px; background: var(--agent-band, var(--accent)); animation: tab-underline 220ms ease-out; }
+@keyframes tab-underline { from { transform: scaleX(0); opacity: 0; } to { transform: scaleX(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .tab.selected::after { animation: none; } }
 .tab > button { border: 0; border-radius: 0; background: transparent; }
 .tab > button:hover { background: #ffffff08; }
 .tab > [role="tab"] { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 11px; color: inherit; font-size: 12px; }

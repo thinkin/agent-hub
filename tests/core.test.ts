@@ -137,10 +137,14 @@ test('agent adapters encapsulate native launch and resume commands', async () =>
     const codexAgent = { ...agent, type: 'codex' as const, executable: 'codex' };
     const codexPlan = await codex.prepareLaunch(codexAgent, '/work', id);
     assert.match(codexPlan.command, new RegExp(`'codex' resume '${id}'`)); assert.equal(codexPlan.agentSessionId, id);
+    // Codex and TraeX new sessions launch without a pre-assigned id and backfill the real one.
+    const codexNew = await codex.prepareLaunch(codexAgent, '/work');
+    assert.doesNotMatch(codexNew.command, /--session-id/); assert.equal(codexNew.agentSessionId, undefined); assert.equal(typeof codexNew.resolveSessionId, 'function');
     const traexAgent = { ...agent, type: 'traex' as const, executable: 'traex' };
     const traexPlan = await traex.prepareLaunch(traexAgent, '/work');
-    assert.match(traexPlan.command, /'traex' --session-id/); assert.ok(traexPlan.agentSessionId);
-    assert.notEqual(claudePlan.agentSessionId, traexPlan.agentSessionId);
+    assert.doesNotMatch(traexPlan.command, /--session-id/); assert.equal(traexPlan.agentSessionId, undefined); assert.equal(typeof traexPlan.resolveSessionId, 'function');
+    const traexResume = await traex.prepareLaunch(traexAgent, '/work', id);
+    assert.match(traexResume.command, new RegExp(`'traex' resume '${id}'`)); assert.equal(traexResume.agentSessionId, id);
   } finally { claude.close(); codex.close(); traex.close(); }
 });
 

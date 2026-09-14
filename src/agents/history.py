@@ -34,15 +34,18 @@ def records(path):
 
 def claude_summary(path, modified):
     result = {"id": path.stem, "cwd": "", "title": "", "modified": modified}
+    custom, generated = "", ""
     for item in records(path):
         if item.get("isSidechain"): continue
         if isinstance(item.get("cwd"), str): result["cwd"] = item["cwd"]
-        if item.get("type") == "custom-title" and isinstance(item.get("customTitle"), str): result["title"] = item["customTitle"][:180]
+        if item.get("type") == "custom-title" and isinstance(item.get("customTitle"), str): custom = item["customTitle"][:180]
+        elif item.get("type") == "ai-title" and isinstance(item.get("aiTitle"), str): generated = item["aiTitle"][:180]
         elif not result["title"] and item.get("type") == "user" and not item.get("isMeta"):
             message = item.get("message")
             content = message.get("content", "") if isinstance(message, dict) else ""
             if isinstance(content, list): content = " ".join(part["text"] for part in content if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str))
             if isinstance(content, str): result["title"] = " ".join(content.split())[:180]
+    result["title"] = custom or generated or result["title"]
     return result
 
 

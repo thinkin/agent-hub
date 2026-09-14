@@ -15,8 +15,14 @@ export class TraexAdapter extends BaseAgentAdapter {
     if (!output.includes('--session-id') || !output.includes('resume')) throw new Error('需要支持 --session-id / resume 的 TraeX');
   }
   async prepareLaunch(agent: Agent, cwd: string, sessionId?: string, picker = false) {
-    const id = sessionId ?? (!picker ? crypto.randomUUID() : undefined);
-    const option = sessionId ? `resume ${quote(sessionId)}` : picker ? 'resume' : `--session-id ${quote(id!)}`;
-    return { command: this.inDirectory(agent, cwd, `exec -- ${this.executable(agent)} ${option}`), agentSessionId: id };
+    // Current TraeX ignores --session-id (a legacy compat flag) and mints its own thread
+    // id, persisted only after the first user message. So new sessions launch without a
+    // pre-assigned id and adopt the real one via backfill, matching Codex.
+    const option = sessionId ? `resume ${quote(sessionId)}` : picker ? 'resume' : '';
+    const command = this.inDirectory(agent, cwd, `exec -- ${this.executable(agent)} ${option}`.trimEnd());
+    return {
+      command, agentSessionId: sessionId,
+      resolveSessionId: !sessionId && !picker ? (signal: AbortSignal) => this.trackNewThread(agent, cwd, signal) : undefined,
+    };
   }
 }
