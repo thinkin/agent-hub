@@ -161,7 +161,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.getByRole('button', { name: /修复终端刷新问题.*活跃/ }).click();
     await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
     expect(spawns).toBe(2);
-    expect(store.get().workspace.tabs.filter(tab => tab.agentId === agentId).map(tab => tab.agentSessionId)).toEqual([historyId, firstSession.agentSessionId]);
+    await expect.poll(() => store.get().workspace.tabs.filter(tab => tab.agentId === agentId).map(tab => tab.agentSessionId)).toEqual([historyId, firstSession.agentSessionId]);
     await expect(activeTab()).toContainText('修复终端刷新问题');
     await expect(page.locator('.xterm-screen')).toContainText('REPLY:browser-input');
     expect(deletes).toEqual([]);
