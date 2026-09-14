@@ -10,7 +10,7 @@
   "engines": { "node": ">=22" },
   "scripts": {
     "postinstall": "node scripts/prepare-pty.mjs",
-    "dev": "tsx src/cli.ts start --dev --no-open",
+    "dev": "tsx src/cli.ts start --dev",
     "build": "tsc && vite build && node scripts/copy-assets.mjs",
     "prepack": "npm run build",
     "start": "node dist/cli.js start",

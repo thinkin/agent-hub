@@ -20,17 +20,15 @@
 
 准备 Node.js 22+、Python 3，以及至少一个已安装并完成认证的 Agent CLI。本机目前已验证 macOS。
 
-npm 包名为 `@evanginx/agent-hub`，发布后可通过 `npm install -g @evanginx/agent-hub` 安装，使用 `agent-hub start` 启动。
-
-从源码运行，在项目目录执行：
+无需克隆仓库或全局安装，直接运行最新版：
 
 ```sh
-npm ci
-npm run build
-npm start
+npx --yes --registry=https://registry.npmjs.org/ @evanginx/agent-hub@latest start
 ```
 
 浏览器会自动打开工作台，已检测到的本地 Agent 自动就位。选择 Agent，开始你的第一个任务。
+
+可通过 `PORT`（默认 `4317`）和 `CONFIG_DIR`（默认 `~/.agent-hub/`）自定义启动环境；`--port` / `--config-dir` 参数优先。`CONFIG_DIR` 只控制 Agent Hub 自身配置，不改变各 Agent CLI 的配置目录。
 
 **连接远程？** 先确保本机可以免交互 SSH 登录目标 Linux 机器，且远程已安装 Agent CLI 和 Python 3；然后在工作台「管理 Agents」中注册，测试通过即可保存。
 
@@ -42,35 +40,13 @@ Agent Hub 只负责终端与工作区管理，对话仍由各 Agent 自己保存
 
 ## 参与开发
 
+在项目目录执行：
+
 ```sh
+npm ci
 make dev PORT=4318   # 开发服务，前端修改后刷新页面
 make check          # 类型检查与非浏览器测试
 make test-browser   # 浏览器回归测试，需要 Google Chrome
 ```
 
 更多命令见 `make help`，开发约定见 [AGENTS.md](AGENTS.md)。
-
-<details>
-<summary>维护者：自动检查与 npm 发布</summary>
-
-分支 push / PR 自动运行检查、浏览器测试及发布包安装验证（Linux / macOS）。推送与 `package.json` 版本一致的 `vX.Y.Z` 标签后，测试通过才发布 npm；暂不自动发布预览版本。
-
-首次发布需维护者在本机 `npm login`，运行 `npm publish --access public --registry=https://registry.npmjs.org/` 创建 `@evanginx/agent-hub` 包（会自动构建）。随后在 npm 包设置中添加 **Trusted Publisher → GitHub Actions**：
-
-- Organization or user：`thinkin`
-- Repository：`agent-hub`
-- Workflow filename：`publish.yml`
-- Environment name：留空
-- Allowed actions：允许直接 `npm publish`
-
-后续在检查通过、工作区干净且准备发布时运行：
-
-```sh
-npm version patch
-git push origin main
-git push origin "v$(node -p 'require(\"./package.json\").version')"
-```
-
-`npm version patch` 会同步版本、创建提交和标签；也可使用 `minor` 或 `major`。发布采用 [npm OIDC](https://docs.npmjs.com/trusted-publishers/)，无需配置 `NPM_TOKEN`。
-
-</details>

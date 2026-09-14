@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { spawn, execFile } from 'node:child_process';
+import { createServer } from 'node:net';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +17,67 @@ import { Sessions } from '../src/sessions.js';
 import { ClaudeAdapter } from '../src/agents/claude.js';
 import { AgentRegistry } from '../src/agents/registry.js';
 import { createApp } from '../src/server.js';
+
+const cliPath = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
+const execFileAsync = promisify(execFile);
+
+async function availablePort() {
+  const server = createServer();
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const port = (server.address() as { port: number }).port;
+  await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  return port;
+}
+
+test('CLI environment settings isolate configuration and yield to explicit options', { timeout: 30000 }, async t => {
+  for (const mode of ['environment', 'arguments', 'home'] as const) await t.test(mode, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agent-hub-cli-'));
+    const port = await availablePort();
+    const args = ['--import', import.meta.resolve('tsx'), cliPath, 'start', '--no-open'];
+    if (mode === 'arguments') args.push('--port', String(port), '--config-dir', 'explicit config');
+    const configName = mode === 'arguments' ? 'explicit config' : 'environment config';
+    const child = spawn(process.execPath, args, {
+      cwd: directory,
+      env: { ...process.env, HOME: directory, PORT: mode === 'arguments' ? 'invalid' : String(port), CONFIG_DIR: mode === 'home' ? '~/environment config' : 'environment config' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const exited = once(child, 'exit');
+    child.stderr.resume();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('CLI startup timed out')), 10000);
+        let output = '';
+        child.stdout.on('data', data => {
+          output += data.toString();
+          if (output.includes(`http://127.0.0.1:${port}/#token=`)) { clearTimeout(timer); resolve(); }
+        });
+        child.once('error', error => { clearTimeout(timer); reject(error); });
+        child.once('exit', code => { clearTimeout(timer); reject(new Error(`CLI exited before ready (${code})`)); });
+      });
+      assert.equal((await fetch(`http://127.0.0.1:${port}/api/config`)).status, 401);
+      assert.equal((await stat(join(directory, configName, 'config.json'))).mode & 0o777, 0o600);
+      assert.equal((await stat(join(directory, configName))).mode & 0o777, 0o700);
+      await assert.rejects(stat(join(directory, '.agent-hub')), { code: 'ENOENT' });
+      if (mode === 'arguments') await assert.rejects(stat(join(directory, 'environment config')), { code: 'ENOENT' });
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+      await exited;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+test('CLI rejects invalid ports before creating configuration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-hub-cli-invalid-'));
+  try {
+    for (const port of ['0', '65536', '1.5', 'invalid']) {
+      await assert.rejects(execFileAsync(process.execPath, ['--import', import.meta.resolve('tsx'), cliPath, 'start', '--no-open'], {
+        env: { ...process.env, PORT: port, CONFIG_DIR: join(directory, 'unused') },
+      }), (error: any) => error.code === 1 && error.stderr.includes('端口必须在 1–65535 之间'));
+    }
+    await assert.rejects(stat(join(directory, 'unused')), { code: 'ENOENT' });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 function nextMessage(ws: WebSocket, predicate: (value: any) => boolean) {
   return new Promise<any>((resolve, reject) => {
