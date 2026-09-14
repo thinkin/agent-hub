@@ -26,6 +26,14 @@ function defaultExecutable(value: unknown) {
 export const agentInput = z.preprocess(defaultExecutable, agentInputSchema);
 export const agentSchema = z.preprocess(defaultExecutable, agentInputSchema.extend({ id: z.string().uuid() }));
 export type Agent = z.infer<typeof agentSchema>;
+export const discoverInput = z.object({
+  connection: z.enum(['ssh', 'local']).default('ssh'),
+  target: text.max(255).regex(/^(?:[a-zA-Z0-9_][a-zA-Z0-9_.-]*@)?[a-zA-Z0-9_][a-zA-Z0-9_.:\[\]-]*$/, '请输入 SSH Host 别名或 user@host'),
+  cwd: text.default('~'),
+  initScript: z.string().max(8192).regex(/^[^\x00]*$/, '初始化脚本不能包含 NUL 字符').default(''),
+}).strict();
+export type DiscoverInput = z.infer<typeof discoverInput>;
+export const batchInput = z.object({ agents: z.array(agentInput).min(1).max(20) }).strict();
 export function initScriptKey(agent: Agent) { return createHash('sha256').update(agent.initScript).digest('hex'); }
 export const tabSchema = z.object({
   id: z.string().uuid(), sessionId: z.string().uuid(), agentSessionId: z.string().uuid().optional(),

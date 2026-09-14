@@ -17,8 +17,6 @@
   --danger: #d6aaaa; --error-border: #574244; --error-bg: #292124; --error-text: #dcafb2; --warning: #c1b4a2; --scrollbar: #424248; --claude: #d97757;
 }
 :root[data-theme="modernLight"] { color-scheme: light; --background: #f7f7f8; --surface: #eeeeef; --raised: #e2e2e4; --border: #c9c9cc; --muted: #686871; --accent: #477aa3; --text: #2d2d31; --strong: #17171a; --input-border: #b5b5ba; --placeholder: #85858d; --hover: #d5d5d8; --active: #cacace; --subtle-hover: #0000000a; --panel-hover: #e9e9eb; --row-hover: #dfdfe2; --primary-bg: #3d6687; --primary-hover: #315572; --primary-text: #fff; --dialog-border: #aaaab0; --backdrop: #30303855; --danger: #9b3e43; --error-border: #c9888c; --error-bg: #f6e7e8; --error-text: #7f292f; --warning: #795f3c; --scrollbar: #aaaab0; }
-:root[data-theme="solarizedDark"] { --background: #002b36; --surface: #073642; --raised: #16434c; --border: #28515a; --muted: #839496; --accent: #b58900; --text: #93a1a1; --strong: #eee8d5; --input-border: #3b6269; --placeholder: #657b83; --hover: #23515a; --active: #2b5b64; --subtle-hover: #ffffff08; --panel-hover: #0c3c47; --row-hover: #12434d; --primary-bg: #b58900; --primary-hover: #c99a08; --primary-text: #002b36; --dialog-border: #466b72; --backdrop: #001d24c7; --danger: #dc8f83; --error-border: #8c4f50; --error-bg: #412f34; --error-text: #f0b2ad; --warning: #cb9b56; --scrollbar: #41666d; }
-:root[data-theme="monokai"] { --background: #272822; --surface: #2f3029; --raised: #3a3b33; --border: #494a42; --muted: #a7a79d; --accent: #a6e22e; --text: #f8f8f2; --strong: #fff; --input-border: #5b5c53; --placeholder: #85867b; --hover: #47483e; --active: #515248; --subtle-hover: #ffffff0a; --panel-hover: #34352e; --row-hover: #3b3c34; --primary-bg: #a6e22e; --primary-hover: #b8f044; --primary-text: #20211d; --dialog-border: #5d5e55; --backdrop: #11120ecc; --danger: #f48771; --error-border: #7d4849; --error-bg: #432f32; --error-text: #ffb3a7; --warning: #e6c56e; --scrollbar: #5b5c53; }
 * { box-sizing: border-box; }
 body { margin: 0; }
 button, input, select, textarea { font: inherit; }
@@ -125,6 +123,18 @@ dialog summary { color: var(--muted); font-size: 12px; margin: 8px 0 18px; curso
 .managed-agent button { font-size: 11px; }
 .agent-type-control { display: flex; align-items: center; gap: 9px; }
 .agent-type-control select { flex: 1; }
+.mode-switch { display: flex; gap: 2px; padding: 2px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 4px; background: var(--background); }
+.mode-option { flex: 1; padding: 7px 0; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--muted); font-size: 12px; }
+.mode-option:hover { background: var(--subtle-hover); }
+.mode-option.selected { color: var(--strong); background: var(--active); border-color: var(--border); }
+.discover-result { margin-bottom: 4px; }
+.discover-agents { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.discover-agent { flex-direction: row; align-items: center; gap: 10px; margin: 0; padding: 10px 11px; border: 1px solid var(--border); border-radius: 3px; background: var(--background); cursor: pointer; }
+.discover-agent input { width: auto; flex: 0 0 auto; }
+.discover-agent > span { color: var(--strong); }
+.discover-agent code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 11px; color: var(--muted); }
+.discover-note { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
+.discover-agent:has(input:disabled) { opacity: .55; cursor: not-allowed; }
 .conversation-launcher { width: min(876px, 100%); height: min(500px, calc(100dvh - 160px)); min-height: 320px; margin: 18px auto 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr) auto; border: 1px solid var(--border); background: var(--surface); overflow: hidden; }
 .launcher-workspace .conversation-launcher { margin: auto; max-height: 560px; box-shadow: 0 16px 55px #0002; }
 .new-conversation, .history-conversations { min-width: 0; min-height: 0; padding: 22px; transition: background 120ms ease; }
@@ -191,8 +201,10 @@ input::placeholder { color: var(--placeholder); }
 .danger-button { color: var(--danger); }
 .brand { color: var(--text); }
 .agent-icon.claude-icon { color: var(--claude); }
-.theme-switch { margin-left: auto; display: flex; flex-direction: row; align-items: center; gap: 7px; color: var(--muted); }
-.theme-switch select { width: 126px; padding: 5px 25px 5px 8px; border-color: var(--border); font-size: 11px; }
+.theme-switch { margin-left: auto; display: flex; flex-direction: row; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--background); }
+.theme-option { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 22px; padding: 0; border: 1px solid transparent; border-radius: 3px; background: transparent; color: var(--muted); }
+.theme-option:hover { background: var(--subtle-hover); }
+.theme-option.selected { color: var(--strong); background: var(--active); border-color: var(--border); }
 .tab.selected { color: var(--strong); }
 .tab > button:hover { background: var(--subtle-hover); }
 .error-banner { border-color: var(--error-border); background: var(--error-bg); color: var(--error-text); }
@@ -205,6 +217,5 @@ dialog::backdrop { background: var(--backdrop); }
 .conversation:hover { background: var(--row-hover); }
 ::-webkit-scrollbar-thumb { background: var(--scrollbar); }
 @media (max-width: 650px) {
-  .theme-switch { gap: 3px; }
-  .theme-switch select { width: 34px; padding: 5px; color: transparent; }
+  .theme-switch { gap: 1px; }
 }

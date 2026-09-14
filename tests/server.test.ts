@@ -96,7 +96,11 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
   const sessions = new Sessions((_agent, _command, cols, rows) => { spawns++; return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "PTY READY\\n"; while IFS= read -r line; do printf "REPLY:%s\\n" "$line"; done'], { cols, rows, name: 'xterm-256color' }); });
   const historicalId = randomUUID();
   const claude = new ClaudeAdapter(async () => '__AGENT_HUB_JSON__' + JSON.stringify({ items: [{ id: historicalId, cwd: '/existing', title: 'Old chat', modified: 1000 }], total: 1, warnings: [] }));
-  const app = await createApp({ store, sessions, registry: new AgentRegistry([claude]) });
+  const discoverRun = async (probe: { target: string }, command: string) => {
+    assert.match(command, /command -v 'claude'/);
+    return probe.target === 'scan-host' ? '__AGENT_HUB_HOST__ scanbox\n__AGENT_HUB_PYTHON__\n__AGENT_HUB_FOUND__ claude-code /opt/claude\n' : '__AGENT_HUB_HOST__ barebox\n';
+  };
+  const app = await createApp({ store, sessions, registry: new AgentRegistry([claude], discoverRun) });
   const origin = await app.listen(0);
   const sockets: WebSocket[] = [];
   try {
@@ -107,6 +111,19 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
     const cookie = auth.headers.get('set-cookie')!.split(';')[0];
     const request = (path: string, method = 'GET', body?: unknown) => fetch(`${origin}/api${path}`, { method, headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
     assert.equal((await request('/config')).status, 200);
+    const discovered = await (await request('/agents/discover', 'POST', { connection: 'ssh', target: 'scan-host' })).json();
+    assert.equal(discovered.hostname, 'scanbox');
+    assert.equal(discovered.python, true);
+    assert.deepEqual(discovered.agents.map((a: { type: string }) => a.type), ['claude-code']);
+    const empty = await (await request('/agents/discover', 'POST', { connection: 'ssh', target: 'bare-host' })).json();
+    assert.deepEqual(empty.agents, []);
+    assert.ok(empty.warnings.length);
+    const before = store.get().agents.length;
+    const batch = await request('/agents/batch', 'POST', { agents: [{ name: 'scanbox Claude', type: 'claude-code', connection: 'ssh', target: 'scan-host', cwd: '~', executable: 'claude' }] });
+    assert.equal(batch.status, 201);
+    assert.equal((await batch.json()).agents.length, 1);
+    assert.equal(store.get().agents.length, before + 1);
+    assert.equal((await request('/agents/batch', 'POST', { agents: [] })).status, 400);
     assert.equal((await request('/sessions', 'POST', { agentId: agent.id, cwd: 'bad\u0000path' })).status, 400);
     const response = await request('/sessions', 'POST', { agentId: agent.id });
     assert.equal(response.status, 201);

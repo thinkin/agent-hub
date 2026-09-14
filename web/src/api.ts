@@ -8,6 +8,8 @@ export function sameEnvironment(a: { type: AgentType; connection: 'ssh' | 'local
 export interface AgentWorkspace { tabs: WorkspaceTab[]; activeTabId: string | null }
 export interface Workspace { selectedAgentId: string | null; agents: Record<string, AgentWorkspace> }
 export interface Config { agents: Agent[]; historyLimit: number; workspace: Workspace }
+export interface DiscoveredAgent { type: AgentType; label: string; executable: string; version: string }
+export interface DiscoverResult { hostname: string; python: boolean; agents: DiscoveredAgent[]; warnings: string[] }
 export function tabSession(tab: WorkspaceTab, agent: Agent, sessions: Session[]) {
   if (!sameEnvironment(tab, agent)) return undefined;
   const matching = sessions.filter(s => sameEnvironment(s, tab) && (s.id === tab.sessionId || (!!tab.agentSessionId && s.agentSessionId === tab.agentSessionId)));

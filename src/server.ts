@@ -4,7 +4,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { z, ZodError } from 'zod';
-import { ConfigStore, agentInput, initScriptKey, workingDirectory } from './config.js';
+import { ConfigStore, agentInput, batchInput, discoverInput, initScriptKey, workingDirectory } from './config.js';
 import { AgentRegistry } from './agents/registry.js';
 import type { AgentAdapter } from './agents/types.js';
 import { Sessions } from './sessions.js';
@@ -92,6 +92,12 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     const agent = { ...agentInput.parse(req.body), id: randomUUID() };
     await store.update(c => { c.agents.push(agent); });
     res.status(201).json(agent);
+  });
+  app.post('/api/agents/discover', async (req, res) => { res.json(await registry.discover(discoverInput.parse(req.body))); });
+  app.post('/api/agents/batch', async (req, res) => {
+    const agents = batchInput.parse(req.body).agents.map(agent => ({ ...agent, id: randomUUID() }));
+    const result = await store.update(c => { c.agents.push(...agents); c.workspace.selectedAgentId ??= agents[0].id; });
+    res.status(201).json({ agents, workspace: result.workspace });
   });
   app.put('/api/agents/:id', async (req, res) => {
     const id = req.params.id;

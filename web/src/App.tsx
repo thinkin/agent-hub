@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { api, mergeConversations, sameEnvironment, tabSession, type Agent, type AgentType, type Config, type Conversation, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
-import { applyTheme, storedTheme, themes, type ThemeName } from './theme';
+import { api, mergeConversations, sameEnvironment, tabSession, type Agent, type AgentType, type Config, type Conversation, type DiscoverResult, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
+import { applyTheme, storedTheme, type ThemeName } from './theme';
 const Terminal = lazy(() => import('./Terminal'));
 const emptyAgent = { name: '', type: 'claude-code' as const, connection: 'ssh' as const, target: '', cwd: '~', executable: 'claude', configDir: '', initScript: '' };
-const agentTypes: Record<AgentType, { label: string; executable: string }> = {
-  'claude-code': { label: 'Claude Code', executable: 'claude' },
-  codex: { label: 'Codex', executable: 'codex' },
-  traex: { label: 'TraeX', executable: 'traex' },
+const agentTypes: Record<AgentType, { label: string; executable: string; suffix: string }> = {
+  'claude-code': { label: 'Claude Code', executable: 'claude', suffix: 'Claude' },
+  codex: { label: 'Codex', executable: 'codex', suffix: 'Codex' },
+  traex: { label: 'TraeX', executable: 'traex', suffix: 'TraeX' },
 };
 const emptyWorkspace: Workspace = { selectedAgentId: null, agents: {} };
 const emptyHistory: History = { items: [], total: 0, warnings: [] };
@@ -56,11 +56,11 @@ function AgentSwitcher({ agents, selected, disabled, onSelect }: { agents: Agent
   </div>;
 }
 
-function AgentForm({ agent, onClose, onSaved }: { agent: Agent | null; onClose(): void; onSaved(agent: Agent): void }) {
+function AgentForm({ agent, embedded, onClose, onSaved }: { agent: Agent | null; embedded?: boolean; onClose(): void; onSaved(agent: Agent): void }) {
   const [form, setForm] = useState(agent ? { name: agent.name, type: agent.type, connection: agent.connection, target: agent.target, cwd: agent.cwd, executable: agent.executable, configDir: agent.configDir, initScript: agent.initScript ?? '' } : emptyAgent);
   const [busy, setBusy] = useState(false), [notice, setNotice] = useState(''), [testedForm, setTestedForm] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
-  useEffect(() => { dialog.current?.showModal(); }, []);
+  useEffect(() => { if (!embedded) dialog.current?.showModal(); }, [embedded]);
   const payload = form.connection === 'local' ? form : (({ connection: _, ...remote }) => remote)(form);
   const formKey = JSON.stringify(payload);
   const updateForm = (next: typeof form) => { setForm(next); setNotice(''); };
@@ -73,8 +73,7 @@ function AgentForm({ agent, onClose, onSaved }: { agent: Agent | null; onClose()
     finally { setBusy(false); }
   };
   const field = (key: keyof typeof form, title: string, placeholder: string, hint?: string) => <label>{title}<input aria-label={title} aria-describedby={hint ? `hint-${key}` : undefined} value={form[key]} placeholder={placeholder} required={key !== 'configDir'} onChange={event => updateForm({ ...form, [key]: event.target.value })} />{hint && <small id={`hint-${key}`}>{hint}</small>}</label>;
-  return <dialog ref={dialog} onCancel={onClose} className="agent-dialog" aria-label={agent ? '编辑 Agent' : '注册 Agent'}><form onSubmit={event => { event.preventDefault(); void act(false); }}>
-    <div className="dialog-heading"><h2>{agent ? '编辑 Agent' : '注册 Agent'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button></div>
+  const body = <form onSubmit={event => { event.preventDefault(); void act(false); }}>
     <p className="subtle">{form.connection === 'local' ? `直接使用本机 ${agentTypes[form.type].label}，不经过 SSH。` : '复用现有 SSH 配置，不安装远程服务。'}</p>
     {field('name', '名称', '开发环境')}
     <label>Agent 类型<span className="agent-type-control"><AgentIcon type={form.type} /><select aria-label="Agent 类型" value={form.type} disabled={!!agent} onChange={event => { const type = event.target.value as AgentType; updateForm({ ...form, type, executable: agentTypes[type].executable }); }}>{Object.entries(agentTypes).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}</select></span></label>
@@ -83,10 +82,74 @@ function AgentForm({ agent, onClose, onSaved }: { agent: Agent | null; onClose()
     <details><summary>高级配置</summary>{field('executable', `${agentTypes[form.type].label} 可执行文件`, agentTypes[form.type].executable)}{field('configDir', 'Agent 配置目录（可选）', form.type === 'claude-code' ? '~/.claude' : form.type === 'codex' ? '~/.codex' : '~/.trae/cli', `留空时遵循${form.connection === 'local' ? '本机' : '远程'}默认配置目录。`)}<label>初始化脚本（Bash）<textarea aria-label="初始化脚本（Bash）" aria-describedby="init-script-hint" rows={6} maxLength={8192} value={form.initScript} onChange={event => updateForm({ ...form, initScript: event.target.value })} placeholder={'source ~/.config/agent/env.sh\nexport PATH="$HOME/.local/bin:$PATH"'} spellCheck={false} /><small id="init-script-hint">在{form.connection === 'local' ? '本机' : '远程'}执行，启动、测试连接及历史查询都会运行。请使用可重复执行、无交互的脚本；显式配置目录优先。内容将明文保存到本地配置，密钥建议从权限受控的文件 source。</small></label></details>
     {notice && <div className="notice" role="status">{notice}</div>}
     <div className="dialog-actions"><button disabled={busy} type="button" onClick={() => void act(true)}>{busy ? '处理中…' : '测试连接'}</button><button disabled={busy || testedForm !== formKey} className="primary" type="submit">保存 Agent</button></div>
-  </form></dialog>;
+  </form>;
+  if (embedded) return body;
+  return <dialog ref={dialog} onCancel={onClose} className="agent-dialog" aria-label={agent ? '编辑 Agent' : '注册 Agent'}>
+    <div className="dialog-heading"><h2>{agent ? '编辑 Agent' : '注册 Agent'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button></div>
+    {body}
+  </dialog>;
 }
 
-function AgentManager({ agents, onClose, onEdit, onRemove }: { agents: Agent[]; onClose(): void; onEdit(agent: Agent | null): void; onRemove(agent: Agent): Promise<void> }) {
+function AgentDiscover({ agents, embedded, onClose, onDone }: { agents: Agent[]; embedded?: boolean; onClose(): void; onDone(workspace: Workspace): void }) {
+  const [form, setForm] = useState({ target: '', cwd: '~' });
+  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [saving, setSaving] = useState(false);
+  const [result, setResult] = useState<DiscoverResult | null>(null);
+  const [selected, setSelected] = useState<Record<AgentType, boolean>>({ 'claude-code': true, codex: true, traex: true });
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { if (!embedded) dialog.current?.showModal(); }, [embedded]);
+  const registered = (type: AgentType) => agents.some(a => a.connection === 'ssh' && a.target === form.target && a.type === type && !a.configDir);
+  const scan = async () => {
+    setBusy(true); setError(''); setResult(null);
+    try { setResult(await api<DiscoverResult>('/agents/discover', 'POST', { connection: 'ssh', target: form.target, cwd: form.cwd })); }
+    catch (error) { setError(errorText(error)); }
+    finally { setBusy(false); }
+  };
+  const chosen = (result?.agents ?? []).filter(item => selected[item.type] && !registered(item.type));
+  const save = async () => {
+    setSaving(true); setError('');
+    try {
+      const prefix = result?.hostname || form.target;
+      const payload = chosen.map(item => ({ name: `${prefix} ${agentTypes[item.type].suffix}`, type: item.type, connection: 'ssh', target: form.target, cwd: form.cwd, executable: item.executable, configDir: '', initScript: '' }));
+      const response = await api<{ workspace: Workspace }>('/agents/batch', 'POST', { agents: payload });
+      onDone(response.workspace);
+    } catch (error) { setError(errorText(error)); setSaving(false); }
+  };
+  const body = <form onSubmit={event => { event.preventDefault(); if (result) void save(); else void scan(); }}>
+    <p className="subtle">填写 SSH 目标后自动探测该机器上的 Claude Code、Codex、TraeX，勾选即可批量注册。</p>
+    <label>SSH 目标<input aria-label="SSH 目标" value={form.target} placeholder="dev-server 或 user@host" required onChange={event => { setForm({ ...form, target: event.target.value }); setResult(null); setError(''); }} /><small>首次连接请先在本机终端完成 SSH 主机信任。</small></label>
+    <label>默认工作目录<input aria-label="默认工作目录" value={form.cwd} placeholder="~" required onChange={event => { setForm({ ...form, cwd: event.target.value }); setResult(null); }} /></label>
+    {result && <div className="discover-result">
+      {result.agents.length ? <ul className="discover-agents">{result.agents.map(item => { const done = registered(item.type); return <li key={item.type}><label className="discover-agent"><input type="checkbox" checked={done ? false : selected[item.type]} disabled={done} onChange={event => setSelected({ ...selected, [item.type]: event.target.checked })} /><AgentIcon type={item.type} size={18} /><span>{result.hostname || form.target} {agentTypes[item.type].suffix}</span><code>{item.executable}</code>{done && <span className="discover-note">已注册</span>}</label></li>; })}</ul> : <p className="subtle">未探测到可用的 Agent CLI。</p>}
+      {result.warnings.map((warning, index) => <p className="sync-warning" key={index}>{warning}</p>)}
+    </div>}
+    {error && <div className="notice error" role="alert">{error}</div>}
+    <div className="dialog-actions">
+      <span />
+      {result ? <button className="primary" type="submit" disabled={saving || !chosen.length}>{saving ? '注册中…' : `注册 ${chosen.length} 个 Agent`}</button> : <button className="primary" type="submit" disabled={busy || !form.target.trim()}>{busy ? '扫描中…' : '扫描环境'}</button>}
+    </div>
+  </form>;
+  if (embedded) return body;
+  return <dialog ref={dialog} onCancel={onClose} className="agent-dialog" aria-label="扫描远程 Agent">
+    <div className="dialog-heading"><h2>扫描远程 Agent</h2><button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button></div>
+    {body}
+  </dialog>;
+}
+
+function AgentRegister({ agents, onClose, onDone, onSaved }: { agents: Agent[]; onClose(): void; onDone(workspace: Workspace): void; onSaved(agent: Agent): void }) {
+  const [mode, setMode] = useState<'discover' | 'manual'>('discover');
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { dialog.current?.showModal(); }, []);
+  return <dialog ref={dialog} onCancel={onClose} className="agent-dialog" aria-label="注册 Agent">
+    <div className="dialog-heading"><h2>注册 Agent</h2><button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button></div>
+    <div className="mode-switch" role="radiogroup" aria-label="注册方式">
+      <button type="button" role="radio" aria-checked={mode === 'discover'} className={`mode-option ${mode === 'discover' ? 'selected' : ''}`} onClick={() => setMode('discover')}>自动识别</button>
+      <button type="button" role="radio" aria-checked={mode === 'manual'} className={`mode-option ${mode === 'manual' ? 'selected' : ''}`} onClick={() => setMode('manual')}>手动配置</button>
+    </div>
+    {mode === 'discover' ? <AgentDiscover embedded agents={agents} onClose={onClose} onDone={onDone} /> : <AgentForm embedded agent={null} onClose={onClose} onSaved={onSaved} />}
+  </dialog>;
+}
+
+function AgentManager({ agents, onClose, onEdit, onRegister, onRemove }: { agents: Agent[]; onClose(): void; onEdit(agent: Agent): void; onRegister(): void; onRemove(agent: Agent): Promise<void> }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [error, setError] = useState('');
   const [removing, setRemoving] = useState('');
@@ -96,7 +159,7 @@ function AgentManager({ agents, onClose, onEdit, onRemove }: { agents: Agent[]; 
     <p className="subtle">一个 Agent 对应一套本地或远程环境；同一台机器可以注册多个。</p>
     <div className="managed-agents">{agents.map(agent => <div className="managed-agent" key={agent.id}><AgentIcon type={agent.type} size={20} /><div><strong>{agent.name}</strong><code>{agent.connection === 'local' ? '本机' : agent.target}</code><small>{agent.cwd}</small></div><button onClick={() => onEdit(agent)} aria-label={`编辑 ${agent.name}`}>编辑</button><button className="danger-button" disabled={!!removing} onClick={async () => { setError(''); setRemoving(agent.id); try { await onRemove(agent); } catch (error) { setError(errorText(error)); } finally { setRemoving(''); } }} aria-label={`移除 ${agent.name}`}>移除</button></div>)}</div>
     {error && <div className="notice error" role="alert">{error}</div>}
-    <div className="dialog-actions"><button className="primary" onClick={() => onEdit(null)}>注册 Agent</button><button onClick={onClose}>完成</button></div>
+    <div className="dialog-actions"><button className="primary" onClick={onRegister}>注册 Agent</button><button onClick={onClose}>完成</button></div>
   </dialog>;
 }
 
@@ -154,7 +217,7 @@ export default function App() {
   const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace);
   const [sessions, setSessions] = useState<Session[]>([]), [titles, setTitles] = useState<HistoryItem[]>([]);
   const [ready, setReady] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [titleError, setTitleError] = useState('');
-  const [modal, setModal] = useState<Agent | null | undefined>(undefined), [managing, setManaging] = useState(false);
+  const [modal, setModal] = useState<Agent | undefined>(undefined), [managing, setManaging] = useState(false), [registering, setRegistering] = useState(false);
   const [dialog, setDialog] = useState<'open' | null>(null);
   const [theme, setTheme] = useState<ThemeName>(storedTheme);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
@@ -258,7 +321,16 @@ export default function App() {
         <AgentSwitcher agents={config.agents} selected={agent} disabled={!ready || busy || !config.agents.length} onSelect={selectAgent} />
         <button className="manage-button" aria-label="管理 Agents" title="管理 Agents" disabled={!ready || busy} onClick={() => setManaging(true)}><span aria-hidden="true">+</span></button>
       </div>
-      <label className="theme-switch"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="10" cy="10" r="3" /><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.35 4.35l1.42 1.42m8.46 8.46 1.42 1.42m0-11.3-1.42 1.42m-8.46 8.46-1.42 1.42" /></svg><select aria-label="颜色主题" value={theme} onChange={event => setTheme(event.target.value as ThemeName)}>{Object.entries(themes).map(([value, item]) => <option value={value} key={value}>{item.label}</option>)}</select></label>
+      <div className="theme-switch" role="radiogroup" aria-label="颜色主题">
+        <button type="button" role="radio" aria-checked={theme === 'modernLight'} className={`theme-option ${theme === 'modernLight' ? 'selected' : ''}`} title="白天（浅色）" onClick={() => setTheme('modernLight')}>
+          <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="10" cy="10" r="3.4" /><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.35 4.35l1.42 1.42m8.46 8.46 1.42 1.42m0-11.3-1.42 1.42m-8.46 8.46-1.42 1.42" /></svg>
+          <span className="sr-only">浅色</span>
+        </button>
+        <button type="button" role="radio" aria-checked={theme === 'modernDark'} className={`theme-option ${theme === 'modernDark' ? 'selected' : ''}`} title="黑夜（深色）" onClick={() => setTheme('modernDark')}>
+          <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M15.5 11.5A6 6 0 0 1 8.5 4.5a6 6 0 1 0 7 7z" /></svg>
+          <span className="sr-only">深色</span>
+        </button>
+      </div>
     </header>
     <div className="tabbar">
       <div className="tabs" role="tablist" aria-label="打开的对话">{tabs.map((tab, index) => {
@@ -276,7 +348,7 @@ export default function App() {
           <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，远程会话继续运行" onClick={() => agent && act(changeWorkspace({ action: 'close', agentId: agent.id, tabId: tab.id }))}>×</button>
         </div>;
       })}</div>
-      <div className="tab-actions"><button aria-label="添加对话" title="新建或打开对话" disabled={!agent || busy} onClick={() => setDialog('open')}>+</button></div>
+      {tabs.length > 0 && <div className="tab-actions"><button aria-label="添加对话" title="新建或打开对话" disabled={!agent || busy} onClick={() => setDialog('open')}>+</button></div>}
     </div>
     <main id="main" className="main" tabIndex={-1}>
       {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
@@ -284,9 +356,10 @@ export default function App() {
       {active ? <section className="active-workspace" id="terminal-panel" role="tabpanel" aria-labelledby={`tab-${active.id}`}>
         <div className="session-toolbar"><code title={active.cwd}>{active.cwd}</code></div>
         {activeSession ? <Suspense fallback={<div className="loading">加载终端…</div>}><Terminal key={activeSession.id} sessionId={activeSession.id} theme={theme} /></Suspense> : <div className="empty-workspace"><h2>{titleFor(active)}</h2><p className="subtle">{changedEnvironment ? 'Agent 环境已更改，无法在当前环境恢复此 tab。' : active.agentSessionId ? busy ? '正在恢复 Agent 对话…' : 'Agent 对话暂未运行，点击当前 tab 可重试。' : '历史选择器没有可靠的对话标识，请重新打开对话。'}</p></div>}
-      </section> : agent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher key={agent.id} agent={agent} sessions={sessions} titles={titles} limit={config.historyLimit} busy={busy} onOpen={open} onStart={cwd => launch({ cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setModal(null)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
+      </section> : agent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher key={agent.id} agent={agent} sessions={sessions} titles={titles} limit={config.historyLimit} busy={busy} onOpen={open} onStart={cwd => launch({ cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
     </main>
-    {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}
+    {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onRegister={() => { setManaging(false); setRegistering(true); }} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}
+    {registering && <AgentRegister agents={config.agents} onClose={() => setRegistering(false)} onDone={next => { setRegistering(false); act(api<Config>('/config').then(data => { setConfig(data); setWorkspace(next); })); }} onSaved={saved => { setRegistering(false); act(api<Config>('/config').then(data => { setConfig(data); return changeWorkspace({ action: 'agent', agentId: saved.id }); })); }} />}
     {modal !== undefined && <AgentForm agent={modal} onClose={() => setModal(undefined)} onSaved={saved => { setModal(undefined); act(api<Config>('/config').then(data => { setConfig(data); return changeWorkspace({ action: 'agent', agentId: saved.id }); })); }} />}
     {dialog === 'open' && agent && <ConversationPicker key={agent.id} agent={agent} sessions={sessions} titles={titles} limit={config.historyLimit} busy={busy} onClose={() => setDialog(null)} onOpen={open} onStart={cwd => launch({ cwd })} />}
   </div>;

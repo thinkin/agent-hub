@@ -30,7 +30,7 @@ npx --yes --registry=https://registry.npmjs.org/ @evanginx/agent-hub@latest star
 
 可通过 `PORT`（默认 `4317`）和 `CONFIG_DIR`（默认 `~/.agent-hub/`）自定义启动环境；`--port` / `--config-dir` 参数优先。`CONFIG_DIR` 只控制 Agent Hub 自身配置，不改变各 Agent CLI 的配置目录。
 
-**连接远程？** 先确保本机可以免交互 SSH 登录目标 Linux 机器，且远程已安装 Agent CLI 和 Python 3；然后在工作台「管理 Agents」中注册，测试通过即可保存。
+**连接远程？** 先确保本机可以免交互 SSH 登录目标 Linux 机器，且远程已安装 Agent CLI 和 Python 3；然后在工作台「扫描远程 Agent」中填入 SSH 目标，自动探测该机器上的 Claude Code、Codex、TraeX，勾选后一键批量注册。需要自定义可执行文件、配置目录或初始化脚本时，可切换到「手动填写」。
 
 ## 保持轻量，也守住边界
 
