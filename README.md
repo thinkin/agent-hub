@@ -20,7 +20,9 @@
 
 准备 Node.js 22+、Python 3，以及至少一个已安装并完成认证的 Agent CLI。本机目前已验证 macOS。
 
-在项目目录运行：
+npm 包名为 `@evanginx/agent-hub`，发布后可通过 `npm install -g @evanginx/agent-hub` 安装，使用 `agent-hub start` 启动。
+
+从源码运行，在项目目录执行：
 
 ```sh
 npm ci
@@ -53,7 +55,7 @@ make test-browser   # 浏览器回归测试，需要 Google Chrome
 
 分支 push / PR 自动运行检查、浏览器测试及发布包安装验证（Linux / macOS）。推送与 `package.json` 版本一致的 `vX.Y.Z` 标签后，测试通过才发布 npm；暂不自动发布预览版本。
 
-首次发布需维护者在本机 `npm login`，运行 `npm publish --access public --registry=https://registry.npmjs.org/` 创建 `multi-agent-mgr` 包（会自动构建）。随后在 npm 包设置中添加 **Trusted Publisher → GitHub Actions**：
+首次发布需维护者在本机 `npm login`，运行 `npm publish --access public --registry=https://registry.npmjs.org/` 创建 `@evanginx/agent-hub` 包（会自动构建）。随后在 npm 包设置中添加 **Trusted Publisher → GitHub Actions**：
 
 - Organization or user：`thinkin`
 - Repository：`agent-hub`

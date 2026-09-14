@@ -1,12 +1,12 @@
 {
-  "name": "multi-agent-mgr",
+  "name": "@evanginx/agent-hub",
   "version": "0.1.0",
   "description": "Agent Hub: a lightweight terminal workspace for local and remote coding agents",
   "repository": { "type": "git", "url": "git+https://github.com/thinkin/agent-hub.git" },
   "files": ["dist", "scripts/prepare-pty.mjs", "web/public/agent-hub-lockup-dark.png", "web/public/agent-hub-lockup-light.png"],
   "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
   "type": "module",
-  "bin": { "multi-agent-mgr": "dist/cli.js" },
+  "bin": { "agent-hub": "dist/cli.js" },
   "engines": { "node": ">=22" },
   "scripts": {
     "postinstall": "node scripts/prepare-pty.mjs",

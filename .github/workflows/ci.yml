@@ -47,11 +47,11 @@ jobs:
         run: |
           package_file=$(node -p "const p = require('./package.json'); p.name.replace(/^@/, '').replace('/', '-') + '-' + p.version + '.tgz'")
           npm install --prefix "$RUNNER_TEMP/agent-hub-smoke" --omit=dev --package-lock=false "$PWD/$package_file"
-          "$RUNNER_TEMP/agent-hub-smoke/node_modules/.bin/multi-agent-mgr" --help
+          "$RUNNER_TEMP/agent-hub-smoke/node_modules/.bin/agent-hub" --help
           node --input-type=module <<'NODE'
           import { accessSync } from 'node:fs';
           import { join } from 'node:path';
-          const root = join(process.env.RUNNER_TEMP, 'agent-hub-smoke/node_modules/multi-agent-mgr');
+          const root = join(process.env.RUNNER_TEMP, 'agent-hub-smoke/node_modules/@evanginx/agent-hub');
           for (const file of ['dist/agents/history.py', 'dist/web/index.html', 'dist/web/agent-hub-lockup-dark.png', 'scripts/prepare-pty.mjs']) {
             accessSync(join(root, file));
           }
