@@ -58,29 +58,31 @@ function AgentSwitcher({ agents, selected, disabled, onSelect }: { agents: Agent
 
 function AgentForm({ agent, onClose, onSaved }: { agent: Agent | null; onClose(): void; onSaved(agent: Agent): void }) {
   const [form, setForm] = useState(agent ? { name: agent.name, type: agent.type, connection: agent.connection, target: agent.target, cwd: agent.cwd, executable: agent.executable, configDir: agent.configDir, initScript: agent.initScript ?? '' } : emptyAgent);
-  const [busy, setBusy] = useState(false), [notice, setNotice] = useState('');
+  const [busy, setBusy] = useState(false), [notice, setNotice] = useState(''), [testedForm, setTestedForm] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { dialog.current?.showModal(); }, []);
+  const payload = form.connection === 'local' ? form : (({ connection: _, ...remote }) => remote)(form);
+  const formKey = JSON.stringify(payload);
+  const updateForm = (next: typeof form) => { setForm(next); setNotice(''); };
   const act = async (probe: boolean) => {
     setBusy(true); setNotice('');
     try {
-      const payload = form.connection === 'local' ? form : (({ connection: _, ...remote }) => remote)(form);
-      if (probe) { const result = await api<{ message: string }>('/agents/probe', 'POST', payload); setNotice(result.message); }
+      if (probe) { const result = await api<{ message: string }>('/agents/probe', 'POST', payload); setTestedForm(formKey); setNotice(result.message); }
       else { const saved = await api<Agent>(agent ? `/agents/${agent.id}` : '/agents', agent ? 'PUT' : 'POST', payload); onSaved(saved); }
-    } catch (error) { setNotice(errorText(error)); }
+    } catch (error) { if (probe) setTestedForm(null); setNotice(errorText(error)); }
     finally { setBusy(false); }
   };
-  const field = (key: keyof typeof form, title: string, placeholder: string, hint?: string) => <label>{title}<input aria-label={title} aria-describedby={hint ? `hint-${key}` : undefined} value={form[key]} placeholder={placeholder} required={key !== 'configDir'} onChange={event => setForm({ ...form, [key]: event.target.value })} />{hint && <small id={`hint-${key}`}>{hint}</small>}</label>;
+  const field = (key: keyof typeof form, title: string, placeholder: string, hint?: string) => <label>{title}<input aria-label={title} aria-describedby={hint ? `hint-${key}` : undefined} value={form[key]} placeholder={placeholder} required={key !== 'configDir'} onChange={event => updateForm({ ...form, [key]: event.target.value })} />{hint && <small id={`hint-${key}`}>{hint}</small>}</label>;
   return <dialog ref={dialog} onCancel={onClose} className="agent-dialog" aria-label={agent ? '编辑 Agent' : '注册 Agent'}><form onSubmit={event => { event.preventDefault(); void act(false); }}>
     <div className="dialog-heading"><h2>{agent ? '编辑 Agent' : '注册 Agent'}</h2><button type="button" className="icon-button" onClick={onClose} aria-label="关闭">×</button></div>
     <p className="subtle">{form.connection === 'local' ? `直接使用本机 ${agentTypes[form.type].label}，不经过 SSH。` : '复用现有 SSH 配置，不安装远程服务。'}</p>
     {field('name', '名称', '开发环境')}
-    <label>Agent 类型<span className="agent-type-control"><AgentIcon type={form.type} /><select aria-label="Agent 类型" value={form.type} disabled={!!agent} onChange={event => { const type = event.target.value as AgentType; setForm({ ...form, type, executable: agentTypes[type].executable }); }}>{Object.entries(agentTypes).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}</select></span></label>
+    <label>Agent 类型<span className="agent-type-control"><AgentIcon type={form.type} /><select aria-label="Agent 类型" value={form.type} disabled={!!agent} onChange={event => { const type = event.target.value as AgentType; updateForm({ ...form, type, executable: agentTypes[type].executable }); }}>{Object.entries(agentTypes).map(([value, item]) => <option key={value} value={value}>{item.label}</option>)}</select></span></label>
     {form.connection === 'ssh' && field('target', 'SSH 目标', 'dev-server 或 user@host', '首次连接请先在本机终端完成 SSH 主机信任。')}
     {field('cwd', '默认工作目录', '~/projects')}
-    <details><summary>高级配置</summary>{field('executable', `${agentTypes[form.type].label} 可执行文件`, agentTypes[form.type].executable)}{field('configDir', 'Agent 配置目录（可选）', form.type === 'claude-code' ? '~/.claude' : form.type === 'codex' ? '~/.codex' : '~/.trae/cli', `留空时遵循${form.connection === 'local' ? '本机' : '远程'}默认配置目录。`)}<label>初始化脚本（Bash）<textarea aria-label="初始化脚本（Bash）" aria-describedby="init-script-hint" rows={6} maxLength={8192} value={form.initScript} onChange={event => setForm({ ...form, initScript: event.target.value })} placeholder={'source ~/.config/agent/env.sh\nexport PATH="$HOME/.local/bin:$PATH"'} spellCheck={false} /><small id="init-script-hint">在{form.connection === 'local' ? '本机' : '远程'}执行，启动、测试连接及历史查询都会运行。请使用可重复执行、无交互的脚本；显式配置目录优先。内容将明文保存到本地配置，密钥建议从权限受控的文件 source。</small></label></details>
+    <details><summary>高级配置</summary>{field('executable', `${agentTypes[form.type].label} 可执行文件`, agentTypes[form.type].executable)}{field('configDir', 'Agent 配置目录（可选）', form.type === 'claude-code' ? '~/.claude' : form.type === 'codex' ? '~/.codex' : '~/.trae/cli', `留空时遵循${form.connection === 'local' ? '本机' : '远程'}默认配置目录。`)}<label>初始化脚本（Bash）<textarea aria-label="初始化脚本（Bash）" aria-describedby="init-script-hint" rows={6} maxLength={8192} value={form.initScript} onChange={event => updateForm({ ...form, initScript: event.target.value })} placeholder={'source ~/.config/agent/env.sh\nexport PATH="$HOME/.local/bin:$PATH"'} spellCheck={false} /><small id="init-script-hint">在{form.connection === 'local' ? '本机' : '远程'}执行，启动、测试连接及历史查询都会运行。请使用可重复执行、无交互的脚本；显式配置目录优先。内容将明文保存到本地配置，密钥建议从权限受控的文件 source。</small></label></details>
     {notice && <div className="notice" role="status">{notice}</div>}
-    <div className="dialog-actions"><button disabled={busy} type="button" onClick={() => void act(true)}>{busy ? '处理中…' : '测试连接'}</button><button disabled={busy} className="primary" type="submit">保存 Agent</button></div>
+    <div className="dialog-actions"><button disabled={busy} type="button" onClick={() => void act(true)}>{busy ? '处理中…' : '测试连接'}</button><button disabled={busy || testedForm !== formKey} className="primary" type="submit">保存 Agent</button></div>
   </form></dialog>;
 }
 

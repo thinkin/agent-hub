@@ -1,0 +1,61 @@
+name: Publish npm
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: check
+    if: github.repository == 'thinkin/agent-hub'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Verify release version and npm OIDC support
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          if (!/^\d+\.\d+\.\d+$/.test(pkg.version) || process.env.RELEASE_TAG !== `v${pkg.version}`) {
+            throw new Error('Release tag must match the stable package.json version (vX.Y.Z).');
+          }
+          if (lock.version !== pkg.version || lock.packages[''].version !== pkg.version) {
+            throw new Error('package-lock.json version must match package.json.');
+          }
+          const [major, minor, patch] = execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number);
+          if (major < 11 || (major === 11 && (minor < 5 || (minor === 5 && patch < 1)))) {
+            throw new Error('npm >= 11.5.1 is required for trusted publishing.');
+          }
+          NODE
+      - run: npm ci
+      - name: Build release package
+        run: npm pack
+      - name: Publish with OIDC
+        run: |
+          package_file=$(node -p "const p = require('./package.json'); p.name.replace(/^@/, '').replace('/', '-') + '-' + p.version + '.tgz'")
+          npm publish "$package_file" --access public

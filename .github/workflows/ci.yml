@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: '22'
+          - os: ubuntu-latest
+            node: '24'
+          - os: macos-latest
+            node: '24'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - run: npm ci
+      - run: make check
+      - run: npx playwright install --with-deps chrome
+      - run: make test-browser
+      - name: Build and pack
+        run: npm pack
+      - name: Test packaged CLI without dev dependencies
+        shell: bash
+        run: |
+          package_file=$(node -p "const p = require('./package.json'); p.name.replace(/^@/, '').replace('/', '-') + '-' + p.version + '.tgz'")
+          npm install --prefix "$RUNNER_TEMP/agent-hub-smoke" --omit=dev --package-lock=false "$PWD/$package_file"
+          "$RUNNER_TEMP/agent-hub-smoke/node_modules/.bin/multi-agent-mgr" --help
+          node --input-type=module <<'NODE'
+          import { accessSync } from 'node:fs';
+          import { join } from 'node:path';
+          const root = join(process.env.RUNNER_TEMP, 'agent-hub-smoke/node_modules/multi-agent-mgr');
+          for (const file of ['dist/agents/history.py', 'dist/web/index.html', 'dist/web/agent-hub-lockup-dark.png', 'scripts/prepare-pty.mjs']) {
+            accessSync(join(root, file));
+          }
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results-${{ matrix.os }}-node-${{ matrix.node }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
