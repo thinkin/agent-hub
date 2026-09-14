@@ -8,10 +8,17 @@ const agentTypes: Record<AgentType, { label: string; executable: string; suffix:
   codex: { label: 'Codex', executable: 'codex', suffix: 'Codex' },
   traex: { label: 'TraeX', executable: 'traex', suffix: 'TraeX' },
 };
-const emptyWorkspace: Workspace = { selectedAgentId: null, agents: {} };
+const emptyWorkspace: Workspace = { tabs: [], activeTabId: null };
 const emptyHistory: History = { items: [], total: 0, warnings: [] };
 function errorText(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function timestamp(value: number) { return new Date(value).toLocaleDateString([], { month: '2-digit', day: '2-digit' }); }
+// Give each agent a stable, distinct hue for its tab-group band, derived from its id.
+const bandPalette = ['#d97757', '#6ea8d0', '#83b28a', '#c7a35f', '#b58bd0', '#5fb0b0', '#d08fa8', '#9a9ae0'];
+function agentBand(agentId: string) {
+  let hash = 0;
+  for (let i = 0; i < agentId.length; i++) hash = (hash * 31 + agentId.charCodeAt(i)) >>> 0;
+  return bandPalette[hash % bandPalette.length];
+}
 function AgentIcon({ type, size = 18, labelled = true }: { type: Agent['type']; size?: number; labelled?: boolean }) {
   if (type === 'claude-code') return <span className="agent-icon claude-icon" title={labelled ? 'Claude Code' : undefined} aria-hidden={labelled ? undefined : true}><svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.25v19.5M2.25 12h19.5M5.1 5.1l13.8 13.8M18.9 5.1 5.1 18.9M8.27 2.98l7.46 18.04M21.02 8.27 2.98 15.73M15.73 2.98 8.27 21.02M2.98 8.27l18.04 7.46" /></svg>{labelled && <span className="sr-only">Claude Code</span>}</span>;
   if (type === 'codex') return <span className="agent-icon codex-icon" title={labelled ? 'Codex' : undefined} aria-hidden={labelled ? undefined : true}><img className="codex-dark" src="/codex-icon-dark.png" width={size} height={size} alt="" /><img className="codex-light" src="/codex-icon-light.png" width={size} height={size} alt="" />{labelled && <span className="sr-only">Codex</span>}</span>;
@@ -154,19 +161,30 @@ function AgentManager({ agents, onClose, onEdit, onRegister, onRemove }: { agent
   const [error, setError] = useState('');
   const [removing, setRemoving] = useState('');
   useEffect(() => { dialog.current?.showModal(); }, []);
+  const groups = new Map<string, { label: string; local: boolean; agents: Agent[] }>();
+  for (const agent of agents) {
+    const key = `${agent.connection}:${agent.target}`;
+    const group = groups.get(key) ?? { label: agent.connection === 'local' ? `本机 · ${agent.target}` : `SSH · ${agent.target}`, local: agent.connection === 'local', agents: [] };
+    group.agents.push(agent); groups.set(key, group);
+  }
+  const orderedGroups = [...groups.values()].sort((a, b) => Number(b.local) - Number(a.local));
   return <dialog ref={dialog} onCancel={onClose} className="manager-dialog" aria-label="管理 Agents">
     <div className="dialog-heading"><h2>Agents</h2><button className="icon-button" onClick={onClose} aria-label="关闭">×</button></div>
     <p className="subtle">一个 Agent 对应一套本地或远程环境；同一台机器可以注册多个。</p>
-    <div className="managed-agents">{agents.map(agent => <div className="managed-agent" key={agent.id}><AgentIcon type={agent.type} size={20} /><div><strong>{agent.name}</strong><code>{agent.connection === 'local' ? '本机' : agent.target}</code><small>{agent.cwd}</small></div><button onClick={() => onEdit(agent)} aria-label={`编辑 ${agent.name}`}>编辑</button><button className="danger-button" disabled={!!removing} onClick={async () => { setError(''); setRemoving(agent.id); try { await onRemove(agent); } catch (error) { setError(errorText(error)); } finally { setRemoving(''); } }} aria-label={`移除 ${agent.name}`}>移除</button></div>)}</div>
+    <div className="managed-groups">{orderedGroups.map(group => <div className="managed-group" role="group" aria-label={group.label} key={group.label}>
+      <div className="managed-group-label">{group.label}</div>
+      {group.agents.map(agent => <div className="managed-agent" key={agent.id}><AgentIcon type={agent.type} size={20} /><div><strong>{agent.name}</strong><small>{agent.cwd}</small></div><button onClick={() => onEdit(agent)} aria-label={`编辑 ${agent.name}`}>编辑</button><button className="danger-button" disabled={!!removing} onClick={async () => { setError(''); setRemoving(agent.id); try { await onRemove(agent); } catch (error) { setError(errorText(error)); } finally { setRemoving(''); } }} aria-label={`移除 ${agent.name}`}>移除</button></div>)}
+    </div>)}</div>
     {error && <div className="notice error" role="alert">{error}</div>}
     <div className="dialog-actions"><button className="primary" onClick={onRegister}>注册 Agent</button><button onClick={onClose}>完成</button></div>
   </dialog>;
 }
 
-function ConversationLauncher({ agent, sessions, titles, limit, busy, onOpen, onStart }: { agent: Agent; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; onOpen(row: Conversation): Promise<void>; onStart(cwd: string): Promise<void> }) {
+function ConversationLauncher({ agents, agent, onAgentChange, sessions, titles, limit, busy, onOpen, onStart }: { agents: Agent[]; agent: Agent; onAgentChange(id: string): void; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; onOpen(agentId: string, row: Conversation): Promise<void>; onStart(agentId: string, cwd: string): Promise<void> }) {
   const [history, setHistory] = useState<History>(emptyHistory), [query, setQuery] = useState('');
   const [cwd, setCwd] = useState(agent.cwd), [loading, setLoading] = useState(false), [error, setError] = useState('');
   const offset = useRef(0), request = useRef<AbortController | undefined>(undefined);
+  useEffect(() => { setCwd(agent.cwd); setQuery(''); }, [agent.id, agent.cwd]);
   const load = useCallback(async (more = false) => {
     request.current?.abort(); const controller = new AbortController(); request.current = controller;
     setLoading(true); setError(''); const start = more ? offset.current : 0;
@@ -180,8 +198,9 @@ function ConversationLauncher({ agent, sessions, titles, limit, busy, onOpen, on
   }, [agent.id, limit]);
   useEffect(() => { void load(); return () => request.current?.abort(); }, [load]);
   const rows = mergeConversations(agent, sessions, history.items, titles).filter(row => `${row.title} ${row.cwd}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
-  const start = async () => { setError(''); try { await onStart(cwd); } catch (error) { setError(errorText(error)); } };
+  const start = async () => { setError(''); try { await onStart(agent.id, cwd); } catch (error) { setError(errorText(error)); } };
   return <div className="conversation-launcher">
+    <label className="launcher-agent">选择 Agent<AgentSwitcher agents={agents} selected={agent} disabled={busy} onSelect={onAgentChange} /></label>
     <section className="new-conversation" aria-labelledby="new-conversation-heading">
       <div className="launcher-heading"><div><h3 id="new-conversation-heading">新建对话</h3><p>在 {agent.name} 启动新的 {agentTypes[agent.type].label}</p></div></div>
       <form onSubmit={event => { event.preventDefault(); void start(); }}>
@@ -192,7 +211,7 @@ function ConversationLauncher({ agent, sessions, titles, limit, busy, onOpen, on
     <section className="history-conversations" aria-labelledby="history-conversations-heading">
       <div className="history-heading"><div className="launcher-heading"><div><h3 id="history-conversations-heading">打开历史对话</h3><p>接回活跃进程或恢复 {agentTypes[agent.type].label} 记录</p></div></div><button disabled={loading} onClick={() => void load()} aria-label="刷新历史对话" title="刷新历史对话">↻</button></div>
       <input className="conversation-search" aria-label="搜索对话" placeholder="搜索标题或目录…" value={query} onChange={event => setQuery(event.target.value)} />
-      <div className="picker-list" aria-busy={loading}>{rows.map(row => <button className="conversation" key={row.key} disabled={busy} onClick={() => { setError(''); void onOpen(row).catch(error => setError(errorText(error))); }}>
+      <div className="picker-list" aria-busy={loading}>{rows.map(row => <button className="conversation" key={row.key} disabled={busy} onClick={() => { setError(''); void onOpen(agent.id, row).catch(error => setError(errorText(error))); }}>
         <span className={`state-icon ${row.session?.status === 'running' ? 'running' : ''}`} aria-hidden="true" title={row.session?.status === 'running' ? '活跃' : '历史'} />
         <span className="conversation-body"><span className="conversation-title">{row.title}</span><span className="conversation-meta"><span>{row.cwd}</span><time>{timestamp(row.modified)}</time></span></span><span className="sr-only">{row.session?.status === 'running' ? '活跃' : '历史'}</span>
       </button>)}{!rows.length && !loading && <p className="list-empty">{query ? '没有匹配的对话' : '暂无历史对话'}</p>}</div>
@@ -203,39 +222,42 @@ function ConversationLauncher({ agent, sessions, titles, limit, busy, onOpen, on
   </div>;
 }
 
-function ConversationPicker({ agent, sessions, titles, limit, busy, onClose, onOpen, onStart }: { agent: Agent; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; onClose(): void; onOpen(row: Conversation): Promise<void>; onStart(cwd: string): Promise<void> }) {
+function ConversationPicker({ agents, agent, onAgentChange, sessions, titles, limit, busy, onClose, onOpen, onStart }: { agents: Agent[]; agent: Agent; onAgentChange(id: string): void; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; onClose(): void; onOpen(agentId: string, row: Conversation): Promise<void>; onStart(agentId: string, cwd: string): Promise<void> }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { dialog.current?.showModal(); }, []);
   return <dialog className="conversation-dialog" ref={dialog} onCancel={onClose} aria-label="打开对话">
     <div className="dialog-heading"><h2>打开对话</h2><button className="icon-button" aria-label="关闭" onClick={onClose}>×</button></div>
-    <ConversationLauncher agent={agent} sessions={sessions} titles={titles} limit={limit} busy={busy} onOpen={onOpen} onStart={onStart} />
+    <ConversationLauncher agents={agents} agent={agent} onAgentChange={onAgentChange} sessions={sessions} titles={titles} limit={limit} busy={busy} onOpen={onOpen} onStart={onStart} />
   </dialog>;
 }
 
 export default function App() {
   const [config, setConfig] = useState<Config>({ agents: [], historyLimit: 30, workspace: emptyWorkspace });
   const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace);
-  const [sessions, setSessions] = useState<Session[]>([]), [titles, setTitles] = useState<HistoryItem[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]), [titles, setTitles] = useState<Record<string, HistoryItem[]>>({});
   const [ready, setReady] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [titleError, setTitleError] = useState('');
   const [modal, setModal] = useState<Agent | undefined>(undefined), [managing, setManaging] = useState(false), [registering, setRegistering] = useState(false);
   const [dialog, setDialog] = useState<'open' | null>(null);
+  const [launcherAgentId, setLauncherAgentId] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeName>(storedTheme);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const launching = useRef(false);
   const activatedTabs = useRef(new Set<string>());
-  const agent = config.agents.find(a => a.id === workspace.selectedAgentId) ?? config.agents[0];
-  const view = agent ? workspace.agents[agent.id] : undefined;
-  const tabs = view?.tabs ?? [];
-  const active = tabs.find(tab => tab.id === view?.activeTabId);
-  const activeSession = active && agent ? tabSession(active, agent, sessions) : undefined;
-  const environmentKey = agent ? JSON.stringify([agent.id, agent.connection, agent.target, agent.configDir, agent.initScriptKey]) : '';
-  const titleKey = JSON.stringify([tabs.map(t => t.agentSessionId), sessions.map(s => [s.id, s.status])]);
-  const titleFor = (tab: WorkspaceTab) => titles.find(item => item.id === tab.agentSessionId)?.title || (tab.agentSessionId ? '新对话' : '历史选择器');
+  const tabs = workspace.tabs;
+  const active = tabs.find(tab => tab.id === workspace.activeTabId);
+  const agentOf = (tab: WorkspaceTab | undefined) => tab ? config.agents.find(a => a.id === tab.agentId) : undefined;
+  const activeAgent = agentOf(active);
+  const activeSession = active && activeAgent ? tabSession(active, activeAgent, sessions) : undefined;
+  const launcherAgent = config.agents.find(a => a.id === launcherAgentId) ?? config.agents[0];
+  const tabAgentIds = [...new Set(tabs.map(t => t.agentId))].filter(id => config.agents.some(a => a.id === id));
+  const tabAgentKey = [...tabAgentIds].sort().join(',');
+  const titleKey = JSON.stringify([tabs.map(t => [t.agentId, t.agentSessionId]), sessions.map(s => [s.id, s.status])]);
+  const titleFor = (tab: WorkspaceTab) => titles[tab.agentId]?.find(item => item.id === tab.agentSessionId)?.title || (tab.agentSessionId ? '新对话' : '历史选择器');
   useEffect(() => { applyTheme(theme); }, [theme]);
   useEffect(() => {
     const tab = active && document.getElementById(`tab-${active.id}`)?.parentElement;
     if (tab) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [active?.id, environmentKey]);
+  }, [active?.id]);
   const loadSessions = useCallback(async () => { const data = await api<Session[]>('/sessions'); setSessions(data); return data; }, []);
   const changeWorkspace = useCallback((change: object) => {
     const task = queue.current.then(async () => { const next = await api<Workspace>('/workspace', 'PATCH', change); setWorkspace(next); });
@@ -260,67 +282,88 @@ export default function App() {
     const poll = async () => { try { await loadSessions(); } catch (error) { if (!disposed) setError(errorText(error)); } if (!disposed) timer = setTimeout(poll, 3000); };
     timer = setTimeout(poll, 3000); return () => { disposed = true; clearTimeout(timer); };
   }, [ready, loadSessions]);
-  useEffect(() => { setTitles([]); setTitleError(''); }, [environmentKey]);
   useEffect(() => {
-    if (!agent || !ready || (!tabs.length && !sessions.length)) return;
+    if (!ready || !tabAgentIds.length) return;
     const controller = new AbortController(); let timer: ReturnType<typeof setTimeout> | undefined, loading = false;
     const poll = async () => {
       clearTimeout(timer); if (controller.signal.aborted || loading || document.hidden) return;
-      loading = true;
-      try {
-        const result = await api<History>(`/agents/${agent.id}/session-titles`, 'GET', undefined, controller.signal);
-        if (!controller.signal.aborted) { setTitles(result.items); setTitleError(result.warnings.join('；')); }
-      } catch (error) { if (!controller.signal.aborted) setTitleError(`标题同步失败：${errorText(error)}`); }
-      finally { loading = false; if (!controller.signal.aborted) timer = setTimeout(poll, 20000); }
+      loading = true; const warnings: string[] = [];
+      await Promise.all(tabAgentIds.map(async id => {
+        try {
+          const result = await api<History>(`/agents/${id}/session-titles`, 'GET', undefined, controller.signal);
+          if (!controller.signal.aborted) { setTitles(prev => ({ ...prev, [id]: result.items })); warnings.push(...result.warnings); }
+        } catch (error) { if (!controller.signal.aborted) warnings.push(`标题同步失败：${errorText(error)}`); }
+      }));
+      loading = false; if (!controller.signal.aborted) { setTitleError([...new Set(warnings)].join('；')); timer = setTimeout(poll, 20000); }
     };
     void poll();
     const visibility = () => { if (!document.hidden) void poll(); else clearTimeout(timer); };
     document.addEventListener('visibilitychange', visibility);
     return () => { controller.abort(); clearTimeout(timer); document.removeEventListener('visibilitychange', visibility); };
-  }, [environmentKey, titleKey, ready]);
-  const selectAgent = (id: string) => { setDialog(null); act(changeWorkspace({ action: 'agent', agentId: id })); };
-  const launch = async (input: { cwd?: string; historyId?: string }) => {
-    if (!agent || launching.current) return;
-    const agentId = agent.id; launching.current = true; setBusy(true);
+  }, [tabAgentKey, titleKey, ready]);
+  const launch = async (agentId: string, input: { cwd?: string; historyId?: string }) => {
+    if (launching.current) return;
+    launching.current = true; setBusy(true);
     try {
       const session = await api<Session>('/sessions', 'POST', { agentId, ...input });
       await loadSessions(); await changeWorkspace({ action: 'open', agentId, sessionId: session.id }); setDialog(null);
     } finally { launching.current = false; setBusy(false); }
   };
   const selectTab = async (id: string) => {
-    if (!agent) return;
-    const tab = tabs.find(item => item.id === id);
-    await changeWorkspace({ action: 'select', agentId: agent.id, tabId: id });
-    if (tab?.agentSessionId && sameEnvironment(tab, agent) && tabSession(tab, agent, sessions)?.status !== 'running') await launch({ historyId: tab.agentSessionId });
+    const tab = tabs.find(item => item.id === id); if (!tab) return;
+    const tabAgent = agentOf(tab);
+    await changeWorkspace({ action: 'select', tabId: id });
+    if (tab.agentSessionId && tabAgent && sameEnvironment(tab, tabAgent) && tabSession(tab, tabAgent, sessions)?.status !== 'running') await launch(tabAgent.id, { historyId: tab.agentSessionId });
   };
   useEffect(() => {
-    if (!ready || !agent || !active || !active.agentSessionId || !sameEnvironment(active, agent)) return;
-    const key = `${agent.id}:${active.id}`;
+    if (!ready || !active || !activeAgent || !active.agentSessionId || !sameEnvironment(active, activeAgent)) return;
+    const key = active.id;
     if (activeSession?.status === 'running') { activatedTabs.current.add(key); return; }
     if (activatedTabs.current.has(key)) return;
     activatedTabs.current.add(key);
-    act(launch({ historyId: active.agentSessionId }));
-  }, [ready, agent?.id, active?.id, activeSession?.status, environmentKey]);
-  const open = async (row: Conversation) => {
-    if (!agent) return;
-    const existing = tabs.find(tab => sameEnvironment(tab, agent) && (tab.agentSessionId ? tab.agentSessionId === (row.history?.id ?? row.session?.agentSessionId) : tab.sessionId === row.session?.id));
+    act(launch(activeAgent.id, { historyId: active.agentSessionId }));
+  }, [ready, active?.id, activeSession?.status]);
+  const open = async (agentId: string, row: Conversation) => {
+    const tabAgent = config.agents.find(a => a.id === agentId); if (!tabAgent) return;
+    const existing = tabs.find(tab => tab.agentId === agentId && sameEnvironment(tab, tabAgent) && (tab.agentSessionId ? tab.agentSessionId === (row.history?.id ?? row.session?.agentSessionId) : tab.sessionId === row.session?.id));
     if (existing) { await selectTab(existing.id); setDialog(null); }
-    else if (row.session?.status === 'running' || (row.session && !row.history)) { await changeWorkspace({ action: 'open', agentId: agent.id, sessionId: row.session.id }); setDialog(null); }
-    else if (row.history) await launch({ historyId: row.history.id });
+    else if (row.session?.status === 'running' || (row.session && !row.history)) { await changeWorkspace({ action: 'open', agentId, sessionId: row.session.id }); setDialog(null); }
+    else if (row.history) await launch(agentId, { historyId: row.history.id });
   };
   const removeAgent = async (item: Agent) => {
     if (!confirm(`移除 Agent「${item.name}」的配置和 tabs？Agent 对话内容不受影响。`)) return;
     await queue.current; await api(`/agents/${item.id}`, 'DELETE'); const data = await api<Config>('/config'); setConfig(data); setWorkspace(data.workspace);
   };
-  const changedEnvironment = active && agent && !sameEnvironment(active, agent);
+  const groups: { agentId: string; agent?: Agent; tabs: WorkspaceTab[] }[] = [];
+  const groupIndex = new Map<string, number>();
+  for (const tab of tabs) {
+    let idx = groupIndex.get(tab.agentId);
+    if (idx === undefined) { idx = groups.length; groupIndex.set(tab.agentId, idx); groups.push({ agentId: tab.agentId, agent: config.agents.find(a => a.id === tab.agentId), tabs: [] }); }
+    groups[idx].tabs.push(tab);
+  }
+  const focusTab = (id: string) => { document.getElementById(`tab-${id}`)?.focus(); };
+  const moveFocus = (event: React.KeyboardEvent, id: string) => {
+    const index = tabs.findIndex(t => t.id === id); if (index < 0 || !tabs.length) return;
+    let next: number | undefined;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = tabs.length - 1;
+    if (next !== undefined) { event.preventDefault(); act(selectTab(tabs[next].id)); focusTab(tabs[next].id); }
+  };
+  const changedEnvironment = !!active && (!activeAgent || !sameEnvironment(active, activeAgent));
+  const openPicker = (agentId?: string) => { if (agentId) setLauncherAgentId(agentId); setDialog('open'); };
   return <div className="workspace">
     <a className="skip-link" href="#main">跳到终端区域</a>
     <header className="appbar">
       <span className="brand" role="img" aria-label="Agent Hub" title="Agent Hub"><img className="brand-light" src="/agent-hub-lockup-light.png" alt="" /><img className="brand-dark" src="/agent-hub-lockup-dark.png" alt="" /></span>
-      <div className="agent-controls" role="group" aria-label="Agent 选择与管理">
-        <AgentSwitcher agents={config.agents} selected={agent} disabled={!ready || busy || !config.agents.length} onSelect={selectAgent} />
-        <button className="manage-button" aria-label="管理 Agents" title="管理 Agents" disabled={!ready || busy} onClick={() => setManaging(true)}><span aria-hidden="true">+</span></button>
+      <div className="agent-controls" role="group" aria-label="Agent 管理">
+        <button className="manage-button" aria-label="管理 Agents" title="管理 Agents" disabled={!ready || busy} onClick={() => setManaging(true)}>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="8" width="14" height="10" rx="2.5" /><path d="M12 8V4.5M12 4.5a1.4 1.4 0 1 0 0-2.8 1.4 1.4 0 0 0 0 2.8Z" /><path d="M2.6 12v3M21.4 12v3" /><circle cx="9.2" cy="13" r="1.1" fill="currentColor" stroke="none" /><circle cx="14.8" cy="13" r="1.1" fill="currentColor" stroke="none" /></svg>
+          <span className="sr-only">管理 Agents</span>
+        </button>
       </div>
+      {active && <div className="appbar-active" title={`${titleFor(active)}\n${activeAgent ? `${activeAgent.name} · ${activeAgent.connection === 'local' ? '本机' : activeAgent.target}` : ''}\n${active.cwd}`}><span className="appbar-active-title">{titleFor(active)}</span><span className="appbar-active-meta">{activeAgent && <><AgentIcon type={activeAgent.type} size={12} labelled={false} /><span className="appbar-active-agent">{activeAgent.connection === 'local' ? `本机 · ${activeAgent.target}` : activeAgent.target}</span><span aria-hidden="true">·</span></>}<code className="appbar-cwd">{active.cwd}</code></span></div>}
       <div className="theme-switch" role="radiogroup" aria-label="颜色主题">
         <button type="button" role="radio" aria-checked={theme === 'modernLight'} className={`theme-option ${theme === 'modernLight' ? 'selected' : ''}`} title="白天（浅色）" onClick={() => setTheme('modernLight')}>
           <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="10" cy="10" r="3.4" /><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.35 4.35l1.42 1.42m8.46 8.46 1.42 1.42m0-11.3-1.42 1.42m-8.46 8.46-1.42 1.42" /></svg>
@@ -333,34 +376,28 @@ export default function App() {
       </div>
     </header>
     <div className="tabbar">
-      <div className="tabs" role="tablist" aria-label="打开的对话">{tabs.map((tab, index) => {
-        const session = agent && tabSession(tab, agent, sessions), selected = active?.id === tab.id;
-        const status = session?.status === 'running' ? '活跃' : session ? '已退出' : '待恢复';
-        return <div className={`tab ${selected ? 'selected' : ''}`} key={tab.id}>
-          <button role="tab" id={`tab-${tab.id}`} aria-selected={selected} aria-controls="terminal-panel" tabIndex={selected || (!active && index === 0) ? 0 : -1} onClick={() => act(selectTab(tab.id))} title={`${titleFor(tab)}\n${tab.cwd}\n${status}`} onKeyDown={event => {
-            let next: number | undefined;
-            if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
-            if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
-            if (event.key === 'Home') next = 0;
-            if (event.key === 'End') next = tabs.length - 1;
-            if (next !== undefined) { event.preventDefault(); act(selectTab(tabs[next].id)); document.getElementById(`tab-${tabs[next].id}`)?.focus(); }
-          }}><span className={`state-icon ${session?.status === 'running' ? 'running' : ''}`} title={status} aria-hidden="true" /><span className="tab-title">{titleFor(tab)}</span><span className="sr-only">{status}</span></button>
-          <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，远程会话继续运行" onClick={() => agent && act(changeWorkspace({ action: 'close', agentId: agent.id, tabId: tab.id }))}>×</button>
-        </div>;
-      })}</div>
-      {tabs.length > 0 && <div className="tab-actions"><button aria-label="添加对话" title="新建或打开对话" disabled={!agent || busy} onClick={() => setDialog('open')}>+</button></div>}
+      <div className="tabs" role="tablist" aria-label="打开的对话">{groups.map(group => (
+        <div className="tab-group" role="group" style={{ ['--agent-band' as string]: agentBand(group.agentId) }} aria-label={group.agent ? group.agent.name : '已移除的 Agent'} title={group.agent ? `${group.agent.name} · ${group.agent.connection === 'local' ? '本机' : group.agent.target}` : '已移除的 Agent'} key={group.agentId}>{group.tabs.map(tab => {
+          const session = group.agent && tabSession(tab, group.agent, sessions), selected = active?.id === tab.id;
+          const status = session?.status === 'running' ? '活跃' : session ? '已退出' : '待恢复';
+          return <div className={`tab ${selected ? 'selected' : ''}`} key={tab.id}>
+            <button role="tab" id={`tab-${tab.id}`} aria-selected={selected} aria-controls="terminal-panel" tabIndex={selected || (!active && tabs[0]?.id === tab.id) ? 0 : -1} onClick={() => act(selectTab(tab.id))} title={`${titleFor(tab)}\n${tab.cwd}\n${status}`} onKeyDown={event => moveFocus(event, tab.id)}>{group.agent && <AgentIcon type={group.agent.type} size={14} labelled={false} />}<span className={`state-icon ${session?.status === 'running' ? 'running' : ''}`} title={status} aria-hidden="true" /><span className="tab-title">{titleFor(tab)}</span><span className="sr-only">{status}</span></button>
+            <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，远程会话继续运行" onClick={() => act(changeWorkspace({ action: 'close', tabId: tab.id }))}>×</button>
+          </div>;
+        })}</div>
+      ))}</div>
+      {tabs.length > 0 && <div className="tab-actions"><button aria-label="添加对话" title="新建或打开对话" disabled={!config.agents.length || busy || tabs.length >= 20} onClick={() => openPicker()}>+</button></div>}
     </div>
     <main id="main" className="main" tabIndex={-1}>
       {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
       {titleError && <p className="sync-warning">{titleError}</p>}
       {active ? <section className="active-workspace" id="terminal-panel" role="tabpanel" aria-labelledby={`tab-${active.id}`}>
-        <div className="session-toolbar"><code title={active.cwd}>{active.cwd}</code></div>
         {activeSession ? <Suspense fallback={<div className="loading">加载终端…</div>}><Terminal key={activeSession.id} sessionId={activeSession.id} theme={theme} /></Suspense> : <div className="empty-workspace"><h2>{titleFor(active)}</h2><p className="subtle">{changedEnvironment ? 'Agent 环境已更改，无法在当前环境恢复此 tab。' : active.agentSessionId ? busy ? '正在恢复 Agent 对话…' : 'Agent 对话暂未运行，点击当前 tab 可重试。' : '历史选择器没有可靠的对话标识，请重新打开对话。'}</p></div>}
-      </section> : agent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher key={agent.id} agent={agent} sessions={sessions} titles={titles} limit={config.historyLimit} busy={busy} onOpen={open} onStart={cwd => launch({ cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
+      </section> : launcherAgent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher agents={config.agents} agent={launcherAgent} onAgentChange={setLauncherAgentId} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
     </main>
     {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onRegister={() => { setManaging(false); setRegistering(true); }} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}
-    {registering && <AgentRegister agents={config.agents} onClose={() => setRegistering(false)} onDone={next => { setRegistering(false); act(api<Config>('/config').then(data => { setConfig(data); setWorkspace(next); })); }} onSaved={saved => { setRegistering(false); act(api<Config>('/config').then(data => { setConfig(data); return changeWorkspace({ action: 'agent', agentId: saved.id }); })); }} />}
-    {modal !== undefined && <AgentForm agent={modal} onClose={() => setModal(undefined)} onSaved={saved => { setModal(undefined); act(api<Config>('/config').then(data => { setConfig(data); return changeWorkspace({ action: 'agent', agentId: saved.id }); })); }} />}
-    {dialog === 'open' && agent && <ConversationPicker key={agent.id} agent={agent} sessions={sessions} titles={titles} limit={config.historyLimit} busy={busy} onClose={() => setDialog(null)} onOpen={open} onStart={cwd => launch({ cwd })} />}
+    {registering && <AgentRegister agents={config.agents} onClose={() => setRegistering(false)} onDone={next => { setRegistering(false); act(api<Config>('/config').then(data => { setConfig(data); setWorkspace(next); })); }} onSaved={saved => { setRegistering(false); setLauncherAgentId(saved.id); act(api<Config>('/config').then(data => setConfig(data))); }} />}
+    {modal !== undefined && <AgentForm agent={modal} onClose={() => setModal(undefined)} onSaved={saved => { setModal(undefined); setLauncherAgentId(saved.id); act(api<Config>('/config').then(data => setConfig(data))); }} />}
+    {dialog === 'open' && launcherAgent && <ConversationPicker key={launcherAgent.id} agents={config.agents} agent={launcherAgent} onAgentChange={setLauncherAgentId} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} onClose={() => setDialog(null)} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} />}
   </div>;
 }

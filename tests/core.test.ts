@@ -40,9 +40,11 @@ test('legacy config migrates session metadata and keeps type-specific executable
     await mkdir(directory, { recursive: true });
     await writeFile(join(directory, 'config.json'), JSON.stringify({ version: 1, historyLimit: 30, agents: [{ id: agentId, name: 'Legacy', target: 'host', cwd: '~', executable: 'claude', configDir: '', initScript: '' }], workspace: { selectedAgentId: agentId, agents: { [agentId]: { tabs: [{ id: tabId, sessionId: randomUUID(), claudeId: legacySessionId, cwd: '~', target: 'host', configDir: '' }], activeTabId: tabId } } } }));
     const config = (await new ConfigStore(directory).load()).get();
-    assert.equal(config.version, 2);
-    assert.equal(config.workspace.agents[agentId].tabs[0].agentSessionId, legacySessionId);
-    assert.equal(config.workspace.agents[agentId].tabs[0].type, 'claude-code');
+    assert.equal(config.version, 3);
+    assert.equal(config.workspace.tabs[0].agentSessionId, legacySessionId);
+    assert.equal(config.workspace.tabs[0].agentId, agentId);
+    assert.equal(config.workspace.tabs[0].type, 'claude-code');
+    assert.equal(config.workspace.activeTabId, tabId);
     assert.equal(agentInput.parse({ name: 'Codex', type: 'codex', target: 'host' }).executable, 'codex');
     assert.equal(agentInput.parse({ name: 'TraeX', type: 'traex', target: 'host' }).executable, 'traex');
   } finally { await rm(directory, { recursive: true, force: true }); }
@@ -73,7 +75,6 @@ test('local discovery preserves SSH configuration and migrates local target meta
     assert.equal(config.agents.length, 2);
     assert.deepEqual(config.agents[0], { id: config.agents[0].id, name: `${hostname()} Claude`, type: 'claude-code', connection: 'local', target: userInfo().username, cwd: '~', executable: '/opt/bin/claude', configDir: '', initScript: '' });
     assert.equal(config.agents[1].connection, 'ssh');
-    assert.equal(config.workspace.selectedAgentId, config.agents[0].id);
     assert.equal(await runRemote(config.agents[0], 'printf local-direct'), 'local-direct');
     const terminal = spawnTerminal(config.agents[0], 'printf local-pty', 80, 24);
     let output = '';
@@ -86,26 +87,27 @@ test('local discovery preserves SSH configuration and migrates local target meta
     await store.update(value => {
       const local = value.agents[0];
       local.target = 'localhost';
-      value.workspace.agents[local.id] = { tabs: [{ id: randomUUID(), sessionId: randomUUID(), agentSessionId: randomUUID(), cwd: '~', type: 'claude-code', connection: 'local', target: 'localhost', configDir: '' }], activeTabId: null };
+      value.workspace.tabs = [{ id: randomUUID(), agentId: local.id, sessionId: randomUUID(), agentSessionId: randomUUID(), cwd: '~', type: 'claude-code', connection: 'local', target: 'localhost', configDir: '' }];
+      value.workspace.activeTabId = null;
     });
     assert.equal(await ensureLocalAgents(store, find), true);
     assert.equal(store.get().agents[0].target, userInfo().username);
-    assert.equal(store.get().workspace.agents[config.agents[0].id].tabs[0].target, userInfo().username);
+    assert.equal(store.get().workspace.tabs[0].target, userInfo().username);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test('workspace metadata persists without titles or content and resolves sessions by environment', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mam-workspace-'));
   const session: Session = { id: randomUUID(), agentId: agent.id, agentName: agent.name, type: agent.type, connection: agent.connection, target: agent.target, configDir: '', cwd: '/work', agentSessionId: randomUUID(), status: 'running', created: 1 };
-  const tab = { id: randomUUID(), sessionId: session.id, agentSessionId: session.agentSessionId, cwd: session.cwd, type: agent.type, connection: agent.connection, target: session.target, configDir: '' };
+  const tab = { id: randomUUID(), agentId: agent.id, sessionId: session.id, agentSessionId: session.agentSessionId, cwd: session.cwd, type: agent.type, connection: agent.connection, target: session.target, configDir: '' };
   try {
     const store = await new ConfigStore(directory).load();
-    await store.update(c => { c.agents.push(agent); c.workspace = { selectedAgentId: agent.id, agents: { [agent.id]: { tabs: [tab], activeTabId: tab.id } } }; });
+    await store.update(c => { c.agents.push(agent); c.workspace = { tabs: [tab], activeTabId: tab.id }; });
     assert.deepEqual((await new ConfigStore(directory).load()).get().workspace, store.get().workspace);
     const value = store.get().workspace;
-    assert.throws(() => workspaceSchema.parse({ ...value, agents: { [agent.id]: { tabs: [{ ...tab, title: 'private content' }], activeTabId: tab.id } } }));
-    assert.throws(() => workspaceSchema.parse({ ...value, agents: { [agent.id]: { tabs: [tab, tab], activeTabId: tab.id } } }));
-    assert.throws(() => workspaceSchema.parse({ ...value, agents: { [agent.id]: { tabs: [tab], activeTabId: randomUUID() } } }));
+    assert.throws(() => workspaceSchema.parse({ ...value, tabs: [{ ...tab, title: 'private content' }] }));
+    assert.throws(() => workspaceSchema.parse({ ...value, tabs: [tab, tab] }));
+    assert.throws(() => workspaceSchema.parse({ ...value, activeTabId: randomUUID() }));
     assert.equal(tabSession(tab, agent, [session])?.id, session.id);
     assert.equal(tabSession(tab, { ...agent, target: 'other-host' }, [session]), undefined);
     const resumed = { ...session, id: randomUUID() };

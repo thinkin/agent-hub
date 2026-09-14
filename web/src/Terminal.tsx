@@ -10,6 +10,7 @@ export default function Terminal({ sessionId, theme }: { sessionId: string; them
   const [state, setState] = useState('连接终端…');
   const [attempt, setAttempt] = useState(0);
   const takeover = useRef(false);
+  const autoTakeover = useRef(false);
   useEffect(() => {
     const terminal = new XTerminal({ cursorBlink: true, fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', fontSize: 13, lineHeight: 1.3, scrollback: 1500, theme: themes[theme].terminal, allowProposedApi: false });
     terminalRef.current = terminal;
@@ -41,7 +42,11 @@ export default function Terminal({ sessionId, theme }: { sessionId: string; them
       ws.onclose = event => {
         ready = false;
         if (disposed) return;
-        if (event.code === 4001) { setState('此终端由其他页面控制'); return; }
+        // A stale page still holds this terminal — take control automatically once, then fall back to a manual prompt.
+        if (event.code === 4001) {
+          if (!autoTakeover.current) { autoTakeover.current = true; takeover.current = true; setState('接管终端…'); reconnect = setTimeout(connect, 200); return; }
+          setState('此终端由其他页面控制'); return;
+        }
         if (event.code === 4004) { setState('会话已过期，请从历史恢复'); return; }
         setState('连接断开 · 2 秒后重试'); reconnect = setTimeout(connect, 2000);
       };
@@ -60,10 +65,10 @@ export default function Terminal({ sessionId, theme }: { sessionId: string; them
     };
   }, [sessionId, attempt]);
   useEffect(() => { if (terminalRef.current) terminalRef.current.options.theme = themes[theme].terminal; }, [theme]);
-  return <div className="terminal-panel">
-    <div className="terminal-status"><span className={state === '已连接' ? 'live-dot' : 'muted-dot'} />{state}
+  return <div className="terminal-panel" data-state={state === '已连接' ? 'connected' : 'other'}>
+    {state !== '已连接' && <div className="terminal-status"><span className="muted-dot" />{state}
       {state === '此终端由其他页面控制' && <button onClick={() => { takeover.current = true; setAttempt(x => x + 1); }}>接管终端</button>}
-    </div>
+    </div>}
     <div className="terminal-host" ref={host} aria-label="Agent 终端" />
   </div>;
 }

@@ -1,12 +1,12 @@
 export type AgentType = 'claude-code' | 'codex' | 'traex';
 export interface Agent { id: string; name: string; type: AgentType; connection: 'ssh' | 'local'; target: string; cwd: string; executable: string; configDir: string; initScript?: string; initScriptKey?: string }
-export interface WorkspaceTab { id: string; sessionId: string; agentSessionId?: string; cwd: string; type: AgentType; connection: 'ssh' | 'local'; target: string; configDir: string; initScriptKey?: string }
+export interface WorkspaceTab { id: string; agentId: string; sessionId: string; agentSessionId?: string; cwd: string; type: AgentType; connection: 'ssh' | 'local'; target: string; configDir: string; initScriptKey?: string }
 const emptyScriptKey = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 export function sameEnvironment(a: { type: AgentType; connection: 'ssh' | 'local'; target: string; configDir: string; initScriptKey?: string }, b: { type: AgentType; connection: 'ssh' | 'local'; target: string; configDir: string; initScriptKey?: string }) {
   return a.type === b.type && a.connection === b.connection && a.target === b.target && a.configDir === b.configDir && (a.initScriptKey ?? emptyScriptKey) === (b.initScriptKey ?? emptyScriptKey);
 }
 export interface AgentWorkspace { tabs: WorkspaceTab[]; activeTabId: string | null }
-export interface Workspace { selectedAgentId: string | null; agents: Record<string, AgentWorkspace> }
+export interface Workspace { tabs: WorkspaceTab[]; activeTabId: string | null }
 export interface Config { agents: Agent[]; historyLimit: number; workspace: Workspace }
 export interface DiscoveredAgent { type: AgentType; label: string; executable: string; version: string }
 export interface DiscoverResult { hostname: string; python: boolean; agents: DiscoveredAgent[]; warnings: string[] }

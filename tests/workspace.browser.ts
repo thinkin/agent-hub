@@ -46,7 +46,8 @@ test('agent tabs persist across browsers and service restarts without eager proc
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   const openPicker = async () => { await page.getByRole('button', { name: '添加对话', exact: true }).click(); await expect(page.getByRole('dialog', { name: '打开对话' })).toBeVisible(); };
-  const chooseAgent = async (name: string) => { await page.getByRole('combobox', { name: '选择 Agent' }).click(); await page.getByRole('option', { name, exact: true }).click(); };
+  const chooseAgent = async (name: string) => { await page.getByRole('dialog', { name: '打开对话' }).getByRole('combobox', { name: '选择 Agent' }).click(); await page.getByRole('option', { name, exact: true }).click(); };
+  const chooseLauncherAgent = async (name: string) => { await page.getByRole('region', { name: '打开对话' }).getByRole('combobox', { name: '选择 Agent' }).click(); await page.getByRole('option', { name, exact: true }).click(); };
   const activeTab = () => page.getByRole('tab', { selected: true });
   try {
     await page.goto(`${origin}/#token=${app.token}`);
@@ -76,7 +77,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.getByRole('button', { name: '测试连接', exact: true }).click();
     await expect(page.getByRole('status')).toContainText('检查通过');
     await page.getByRole('button', { name: '保存 Agent' }).click();
-    await expect(page.locator('.agent-controls .claude-icon')).toBeVisible();
+    await expect(page.getByRole('region', { name: '打开对话' }).locator('.claude-icon').first()).toBeVisible();
     await expect(page.getByRole('region', { name: '打开对话' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '新建对话' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '打开历史对话' })).toBeVisible();
@@ -84,7 +85,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.screenshot({ path: testInfo.outputPath('empty.png'), fullPage: true });
     await expect(page.locator('.tab-actions button')).toHaveCount(0);
     await page.getByRole('button', { name: '启动 Claude Code', exact: true }).click();
-    await expect(page.locator('.terminal-status')).toContainText('已连接');
+    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
     await expect(page.locator('.tab-actions button')).toHaveCount(1);
     await expect(page.getByRole('button', { name: '添加对话' })).toHaveText('+');
     await page.getByRole('radio', { name: '浅色' }).click();
@@ -99,7 +100,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await openPicker();
     await page.getByRole('dialog', { name: '打开对话' }).getByRole('button', { name: /接入之前已有的对话/ }).click();
     await expect(activeTab()).toContainText('接入之前已有的对话');
-    await expect(page.locator('.terminal-status')).toContainText('已连接');
+    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
     expect(commands.at(-1)).toContain(`--resume '${historyId}'`);
     await expect(page.getByRole('tab')).toHaveCount(2);
     await openPicker();
@@ -111,18 +112,19 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await expect(page.getByRole('tab')).toHaveCount(2);
     expect(spawns).toBe(2);
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).click();
-    await expect(page.locator('.terminal-status')).toContainText('已连接');
+    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
     await expect(activeTab()).toContainText('修复终端刷新问题');
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).press('ArrowRight');
     await expect(activeTab()).toContainText('接入之前已有的对话');
     await page.reload();
     await expect(activeTab()).toContainText('接入之前已有的对话');
-    await expect(page.locator('.terminal-status')).toContainText('已连接');
+    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
     expect(spawns).toBe(2);
     await page.screenshot({ path: testInfo.outputPath('tabs.png'), fullPage: true });
 
     await page.getByRole('button', { name: '管理 Agents' }).click();
     await expect(page.locator('.managed-agent .claude-icon').first()).toBeVisible();
+    await expect(page.getByRole('group', { name: 'SSH · dev-host' })).toBeVisible();
     await page.getByRole('button', { name: '注册 Agent', exact: true }).click();
     await page.getByRole('radio', { name: '手动配置' }).click();
     await page.getByLabel('名称', { exact: true }).fill('Second Claude');
@@ -133,32 +135,33 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.getByRole('button', { name: '测试连接', exact: true }).click();
     await expect(page.getByRole('button', { name: '保存 Agent' })).toBeEnabled();
     await page.getByRole('button', { name: '保存 Agent' }).click();
-    await expect(page.getByRole('combobox', { name: '选择 Agent' })).toContainText('Second Claude - dev-host');
+    // The top-level agent selector is gone: tabs from every agent stay visible together.
+    await expect(page.getByRole('tab')).toHaveCount(2);
+    await expect(page.getByRole('group', { name: 'Dev Claude', exact: true })).toBeVisible();
+    await openPicker();
     await page.getByRole('combobox', { name: '选择 Agent' }).click();
     await expect(page.getByRole('group', { name: 'SSH · dev-host' })).toBeVisible();
     await expect(page.getByRole('option', { name: 'Dev Claude' }).locator('.claude-icon')).toBeVisible();
     await expect(page.getByRole('option', { name: 'Second Claude' }).locator('.claude-icon')).toBeVisible();
-    await page.getByRole('combobox', { name: '选择 Agent' }).press('Escape');
-    await expect(page.getByRole('listbox', { name: 'Agents' })).toHaveCount(0);
-    await expect(page.getByRole('tab')).toHaveCount(0);
-    await page.getByRole('region', { name: '打开对话' }).getByRole('button', { name: /接入之前已有的对话/ }).click();
+    await page.getByRole('option', { name: 'Second Claude', exact: true }).click();
+    await page.getByRole('dialog', { name: '打开对话' }).getByRole('button', { name: /接入之前已有的对话/ }).click();
+    // Same conversation under a different agent opens a new tab in that agent's group.
+    await expect(page.getByRole('tab')).toHaveCount(3);
     await expect(activeTab()).toContainText('接入之前已有的对话');
-    expect(spawns).toBe(2);
-    await chooseAgent('Dev Claude');
-    await expect(page.getByRole('tab')).toHaveCount(2);
-    await expect(activeTab()).toContainText('接入之前已有的对话');
+    await expect(page.getByRole('group', { name: 'Second Claude', exact: true })).toBeVisible();
     const deletes: string[] = [];
     page.on('request', request => { if (request.method() === 'DELETE' && new URL(request.url()).pathname.startsWith('/api/sessions/')) deletes.push(request.url()); });
     await page.getByRole('button', { name: '关闭 修复终端刷新问题' }).click();
-    await expect(page.getByRole('tab')).toHaveCount(1);
+    await expect(page.getByRole('tab')).toHaveCount(2);
     expect(sessions.get(firstSession.id)?.info.status).toBe('running');
     await page.reload();
-    await expect(page.getByRole('tab')).toHaveCount(1);
+    await expect(page.getByRole('tab')).toHaveCount(2);
     await openPicker();
+    await chooseAgent('Dev Claude');
     await page.getByRole('button', { name: /修复终端刷新问题.*活跃/ }).click();
-    await expect(page.locator('.terminal-status')).toContainText('已连接');
+    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
     expect(spawns).toBe(2);
-    expect(store.get().workspace.agents[agentId].tabs.map(tab => tab.agentSessionId)).toEqual([historyId, firstSession.agentSessionId]);
+    expect(store.get().workspace.tabs.filter(tab => tab.agentId === agentId).map(tab => tab.agentSessionId)).toEqual([historyId, firstSession.agentSessionId]);
     await expect(activeTab()).toContainText('修复终端刷新问题');
     await expect(page.locator('.xterm-screen')).toContainText('REPLY:browser-input');
     expect(deletes).toEqual([]);
@@ -169,9 +172,9 @@ test('agent tabs persist across browsers and service restarts without eager proc
     page = await freshContext.newPage();
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`${origin}/#token=${app.token}`);
-    await expect(page.getByRole('tab')).toHaveCount(2);
+    await expect(page.getByRole('tab')).toHaveCount(3);
     await expect(activeTab()).toContainText('修复终端刷新问题');
-    await expect(page.locator('.terminal-status')).toContainText('已连接');
+    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
     expect(store.get().workspace).toEqual(savedWorkspace);
     expect(spawns).toBe(2);
     await page.setViewportSize({ width: 390, height: 720 });
@@ -180,6 +183,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.screenshot({ path: testInfo.outputPath('narrow.png'), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 980 });
     await openPicker();
+    await chooseAgent('Dev Claude');
     await page.getByRole('button', { name: /即将删除的对话/ }).click();
     await expect(activeTab()).toContainText('即将删除的对话');
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).click();
@@ -195,33 +199,35 @@ test('agent tabs persist across browsers and service restarts without eager proc
     page = await freshContext.newPage();
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(`${origin}/#token=${app.token}`);
-    await expect(page.getByRole('tab')).toHaveCount(3);
+    await expect(page.getByRole('tab')).toHaveCount(4);
     await expect(activeTab()).toContainText('修复终端刷新问题');
-    await expect(page.locator('.terminal-status')).toContainText('已连接');
+    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
     await expect(page.getByRole('button', { name: '恢复对话' })).toHaveCount(0);
     expect(sessions.list()).toHaveLength(1);
     expect(spawns).toBe(beforeResume + 1);
     expect(commands.at(-1)).toContain(`--resume '${firstSession.agentSessionId}'`);
     await page.screenshot({ path: testInfo.outputPath('restore.png'), fullPage: true });
-    await page.getByRole('tab').last().click();
+    // The tab whose history was deleted server-side lost its title and cannot resume.
+    await page.getByRole('tab', { name: /新对话/ }).click();
     await expect(page.getByRole('alert')).toContainText('Agent 历史已删除');
     expect(spawns).toBe(beforeResume + 1);
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).click();
-    await expect(page.locator('.terminal-status')).toContainText('已连接');
+    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
     expect(spawns).toBe(beforeResume + 1);
-    await expect(page.getByRole('tab')).toHaveCount(3);
+    await expect(page.getByRole('tab')).toHaveCount(4);
     await page.locator('.xterm-helper-textarea').fill('exit');
     await page.locator('.xterm-helper-textarea').press('Enter');
     await expect(page.locator('.terminal-status')).toContainText('进程已退出');
     await expect(activeTab()).toContainText('已退出');
     await expect(page.getByRole('button', { name: '恢复对话' })).toHaveCount(0);
-    for (let count = 3; count > 0; count--) { await page.locator('.tab-close').last().click(); await expect(page.getByRole('tab')).toHaveCount(count - 1); }
+    for (let count = 4; count > 0; count--) { await page.locator('.tab-close').last().click(); await expect(page.getByRole('tab')).toHaveCount(count - 1); }
     await expect(page.getByRole('region', { name: '打开对话' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '新建对话' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '打开历史对话' })).toBeVisible();
     await page.reload();
     await expect(page.getByRole('tab')).toHaveCount(0);
-    await chooseAgent('Second Claude');
+    await chooseLauncherAgent('Second Claude');
+    await page.getByRole('region', { name: '打开对话' }).getByRole('button', { name: /接入之前已有的对话/ }).click();
     await expect(page.getByRole('tab')).toHaveCount(1);
     await page.getByRole('button', { name: '管理 Agents' }).click();
     await page.getByRole('button', { name: '编辑 Second Claude' }).click();

@@ -35,34 +35,48 @@ export const discoverInput = z.object({
 export type DiscoverInput = z.infer<typeof discoverInput>;
 export const batchInput = z.object({ agents: z.array(agentInput).min(1).max(20) }).strict();
 export function initScriptKey(agent: Agent) { return createHash('sha256').update(agent.initScript).digest('hex'); }
+export const MAX_TABS = 20;
 export const tabSchema = z.object({
-  id: z.string().uuid(), sessionId: z.string().uuid(), agentSessionId: z.string().uuid().optional(),
+  id: z.string().uuid(), agentId: z.string().uuid(), sessionId: z.string().uuid(), agentSessionId: z.string().uuid().optional(),
   cwd: text, type: agentInputSchema.shape.type, connection: agentInputSchema.shape.connection, target: agentInputSchema.shape.target, configDir: agentInputSchema.shape.configDir,
   initScriptKey: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
-export const agentWorkspaceSchema = z.object({
-  tabs: z.array(tabSchema).max(100), activeTabId: z.string().uuid().nullable(),
+export const workspaceSchema = z.object({
+  tabs: z.array(tabSchema).max(MAX_TABS),
+  activeTabId: z.string().uuid().nullable(),
 }).strict().superRefine((value, context) => {
   if (new Set(value.tabs.map(tab => tab.id)).size !== value.tabs.length) context.addIssue({ code: 'custom', message: 'Tab 重复' });
   if (value.activeTabId !== null && !value.tabs.some(tab => tab.id === value.activeTabId)) context.addIssue({ code: 'custom', message: '选中的 Tab 不存在' });
 });
-export const workspaceSchema = z.object({
-  selectedAgentId: z.string().uuid().nullable(),
-  agents: z.record(z.string().uuid(), agentWorkspaceSchema),
-}).strict();
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type WorkspaceTab = z.infer<typeof tabSchema>;
-const currentConfigSchema = z.object({ version: z.literal(2), historyLimit: z.number().int().min(1).max(100), agents: z.array(agentSchema), workspace: workspaceSchema.default(() => ({ selectedAgentId: null, agents: {} })) });
+const emptyWorkspace = () => ({ tabs: [], activeTabId: null });
+const currentConfigSchema = z.object({ version: z.literal(3), historyLimit: z.number().int().min(1).max(100), agents: z.array(agentSchema), workspace: workspaceSchema.default(emptyWorkspace) });
 export const configSchema = z.preprocess(value => {
   if (!value || typeof value !== 'object') return value;
   const raw = structuredClone(value) as any;
-  if (raw.version === 1) {
-    raw.version = 2;
-  }
   const types = new Map((raw.agents ?? []).map((agent: any) => [agent.id, agent.type ?? 'claude-code']));
-  for (const [agentId, view] of Object.entries(raw.workspace?.agents ?? {}) as [string, any][]) for (const tab of view.tabs ?? []) {
-    tab.agentSessionId = tab.agentSessionId ?? tab.claudeId; delete tab.claudeId;
-    tab.type ??= types.get(agentId) ?? 'claude-code';
+  if (raw.version === 1 || raw.version === 2) {
+    // v1/v2 kept per-agent tab groups: { selectedAgentId, agents: { <id>: { tabs, activeTabId } } }.
+    const groups = (raw.workspace?.agents ?? {}) as Record<string, any>;
+    const selected = raw.workspace?.selectedAgentId ?? null;
+    const tabs: any[] = [];
+    let activeTabId: string | null = null;
+    for (const [agentId, view] of Object.entries(groups)) {
+      for (const tab of view?.tabs ?? []) {
+        tab.agentId = agentId;
+        tab.agentSessionId = tab.agentSessionId ?? tab.claudeId; delete tab.claudeId;
+        tab.type ??= types.get(agentId) ?? 'claude-code';
+        tabs.push(tab);
+      }
+      if (agentId === selected && view?.activeTabId) activeTabId = view.activeTabId;
+    }
+    if (!activeTabId && tabs.length) activeTabId = tabs[0].id;
+    raw.workspace = { tabs, activeTabId };
+    raw.version = 3;
+  } else if (raw.workspace) {
+    delete raw.workspace.collapsed;
+    for (const tab of raw.workspace.tabs ?? []) tab.type ??= types.get(tab.agentId) ?? 'claude-code';
   }
   return raw;
 }, currentConfigSchema);
@@ -71,7 +85,7 @@ export const workingDirectory = text;
 const execFileAsync = promisify(execFile);
 
 export class ConfigStore {
-  private state: Config = { version: 2, historyLimit: 30, agents: [], workspace: { selectedAgentId: null, agents: {} } };
+  private state: Config = { version: 3, historyLimit: 30, agents: [], workspace: { tabs: [], activeTabId: null } };
   private queue: Promise<unknown> = Promise.resolve();
   constructor(readonly directory = join(homedir(), '.agent-hub')) {}
   async load() {
@@ -129,12 +143,12 @@ export async function ensureLocalAgents(store: ConfigStore, findExecutable: (com
         if (existing.name === candidate.legacyName) { existing.name = `${machine} ${candidate.suffix}`; changed = true; }
         if (existing.target !== username) {
           const previousTarget = existing.target; existing.target = username; changed = true;
-          for (const tab of config.workspace.agents[existing.id]?.tabs ?? []) if (tab.connection === 'local' && tab.target === previousTarget) tab.target = username;
+          for (const tab of config.workspace.tabs) if (tab.agentId === existing.id && tab.connection === 'local' && tab.target === previousTarget) tab.target = username;
         }
         continue;
       }
       const agent = agentSchema.parse({ id: randomUUID(), name: `${machine} ${candidate.suffix}`, type: candidate.type, connection: 'local', target: username, cwd: '~', executable: candidate.executable, configDir: '', initScript: '' });
-      additions.push(agent); config.workspace.selectedAgentId ??= agent.id; changed = true;
+      additions.push(agent); changed = true;
     }
     config.agents.unshift(...additions);
   });

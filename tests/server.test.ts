@@ -131,19 +131,20 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
     assert.equal((await fetch(`${origin}/api/workspace`)).status, 401);
     assert.equal((await request('/workspace', 'PATCH', { action: 'open', agentId: agent.id, sessionId: session.id, title: 'private' })).status, 400);
     const opened = await (await request('/workspace', 'PATCH', { action: 'open', agentId: agent.id, sessionId: session.id })).json();
-    const tabId = opened.agents[agent.id].activeTabId;
-    await Promise.all([request('/workspace', 'PATCH', { action: 'open', agentId: agent.id, sessionId: session.id }), request('/workspace', 'PATCH', { action: 'agent', agentId: agent.id })]);
+    const tabId = opened.activeTabId;
+    await Promise.all([request('/workspace', 'PATCH', { action: 'open', agentId: agent.id, sessionId: session.id }), request('/workspace', 'PATCH', { action: 'select', tabId })]);
     const workspace = await (await request('/workspace')).json();
-    assert.equal(workspace.agents[agent.id].tabs.length, 1);
-    assert.equal(workspace.selectedAgentId, agent.id);
+    assert.equal(workspace.tabs.length, 1);
+    assert.equal(workspace.tabs[0].agentId, agent.id);
+    assert.equal(workspace.activeTabId, tabId);
     assert.deepEqual((await new ConfigStore(directory).load()).get().workspace, workspace);
     const stranger = { ...agent, id: randomUUID(), target: 'other-host' };
     await store.update(c => c.agents.push(stranger));
     assert.equal((await request('/workspace', 'PATCH', { action: 'open', agentId: stranger.id, sessionId: session.id })).status, 500);
-    assert.equal((await request('/workspace', 'PATCH', { action: 'select', agentId: agent.id, tabId: randomUUID() })).status, 500);
-    await request('/workspace', 'PATCH', { action: 'close', agentId: agent.id, tabId });
+    assert.equal((await request('/workspace', 'PATCH', { action: 'select', tabId: randomUUID() })).status, 500);
+    await request('/workspace', 'PATCH', { action: 'close', tabId });
     assert.equal(sessions.get(session.id)?.info.status, 'running');
-    assert.equal(store.get().workspace.agents[agent.id].activeTabId, null);
+    assert.equal(store.get().workspace.activeTabId, null);
     function connect(takeover = false) { const ws = new WebSocket(`${origin.replace('http:', 'ws:')}/terminal/${session.id}?takeover=${takeover}`, { headers: { Cookie: cookie, Origin: origin } }); sockets.push(ws); return ws; }
     const first = connect(); await nextMessage(first, v => v.type === 'snapshot');
     const reply = nextMessage(first, v => v.type === 'output' && v.data.includes('REPLY:hello'));

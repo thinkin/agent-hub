@@ -53,33 +53,37 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
   app.get('/api/workspace', (_req, res) => res.json(store.get().workspace));
   app.patch('/api/workspace', async (req, res) => {
     const input = z.discriminatedUnion('action', [
-      z.object({ action: z.literal('agent'), agentId: z.string().uuid() }).strict(),
       z.object({ action: z.literal('open'), agentId: z.string().uuid(), sessionId: z.string().uuid() }).strict(),
-      z.object({ action: z.literal('select'), agentId: z.string().uuid(), tabId: z.string().uuid() }).strict(),
-      z.object({ action: z.literal('close'), agentId: z.string().uuid(), tabId: z.string().uuid() }).strict(),
+      z.object({ action: z.literal('select'), tabId: z.string().uuid() }).strict(),
+      z.object({ action: z.literal('close'), tabId: z.string().uuid() }).strict(),
     ]).parse(req.body);
     const result = await store.update(c => {
-      const agent = c.agents.find(a => a.id === input.agentId);
-      if (!agent) throw new Error('Agent 不存在');
       const workspace = c.workspace;
-      const view = workspace.agents[agent.id] ??= { tabs: [], activeTabId: null };
-      if (input.action === 'agent') { workspace.selectedAgentId = agent.id; return; }
       if (input.action === 'open') {
+        const agent = c.agents.find(a => a.id === input.agentId);
+        if (!agent) throw new Error('Agent 不存在');
         const session = sessions.get(input.sessionId);
         if (!session || session.isDisposed() || session.info.type !== agent.type || session.info.connection !== agent.connection || session.info.target !== agent.target || session.info.configDir !== agent.configDir || session.info.initScriptKey !== initScriptKey(agent)) throw new Error('会话不属于当前 Agent 环境');
         const info = session.info;
-        let tab = view.tabs.find(t => t.type === info.type && t.connection === info.connection && t.target === info.target && t.configDir === info.configDir && (t.initScriptKey ?? initScriptKey({ ...agent, initScript: '' })) === info.initScriptKey && (info.agentSessionId ? t.agentSessionId === info.agentSessionId : t.sessionId === info.id));
+        let tab = workspace.tabs.find(t => t.agentId === agent.id && t.type === info.type && t.connection === info.connection && t.target === info.target && t.configDir === info.configDir && (t.initScriptKey ?? initScriptKey({ ...agent, initScript: '' })) === info.initScriptKey && (info.agentSessionId ? t.agentSessionId === info.agentSessionId : t.sessionId === info.id));
         if (tab) tab.sessionId = info.id;
-        else { tab = { id: randomUUID(), sessionId: info.id, agentSessionId: info.agentSessionId, cwd: info.cwd, type: info.type, connection: info.connection, target: info.target, configDir: info.configDir, initScriptKey: info.initScriptKey }; view.tabs.push(tab); }
-        view.activeTabId = tab.id;
+        else {
+          if (workspace.tabs.length >= 20) throw new Error('已达到 20 个 tab 上限，请先关闭一些对话');
+          tab = { id: randomUUID(), agentId: agent.id, sessionId: info.id, agentSessionId: info.agentSessionId, cwd: info.cwd, type: info.type, connection: info.connection, target: info.target, configDir: info.configDir, initScriptKey: info.initScriptKey };
+          // Keep tabs from the same agent adjacent by inserting after the last sibling.
+          let insert = workspace.tabs.length;
+          for (let i = workspace.tabs.length - 1; i >= 0; i--) if (workspace.tabs[i].agentId === agent.id) { insert = i + 1; break; }
+          workspace.tabs.splice(insert, 0, tab);
+        }
+        workspace.activeTabId = tab.id;
       } else if (input.action === 'select') {
-        if (!view.tabs.some(t => t.id === input.tabId)) throw new Error('Tab 不存在');
-        view.activeTabId = input.tabId;
+        if (!workspace.tabs.some(t => t.id === input.tabId)) throw new Error('Tab 不存在');
+        workspace.activeTabId = input.tabId;
       } else {
-        const index = view.tabs.findIndex(t => t.id === input.tabId);
+        const index = workspace.tabs.findIndex(t => t.id === input.tabId);
         if (index < 0) return;
-        view.tabs.splice(index, 1);
-        if (view.activeTabId === input.tabId) view.activeTabId = view.tabs[Math.min(index, view.tabs.length - 1)]?.id ?? null;
+        workspace.tabs.splice(index, 1);
+        if (workspace.activeTabId === input.tabId) workspace.activeTabId = workspace.tabs[Math.min(index, workspace.tabs.length - 1)]?.id ?? null;
       }
     });
     res.json(result.workspace);
@@ -96,7 +100,7 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
   app.post('/api/agents/discover', async (req, res) => { res.json(await registry.discover(discoverInput.parse(req.body))); });
   app.post('/api/agents/batch', async (req, res) => {
     const agents = batchInput.parse(req.body).agents.map(agent => ({ ...agent, id: randomUUID() }));
-    const result = await store.update(c => { c.agents.push(...agents); c.workspace.selectedAgentId ??= agents[0].id; });
+    const result = await store.update(c => { c.agents.push(...agents); });
     res.status(201).json({ agents, workspace: result.workspace });
   });
   app.put('/api/agents/:id', async (req, res) => {
@@ -110,7 +114,7 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     const id = req.params.id;
     store.agent(id);
     if (sessions.list().some(s => s.agentId === id && s.status === 'running')) { res.status(409).json({ error: '请先结束该 Agent 的运行会话' }); return; }
-    await store.update(c => { c.agents = c.agents.filter(a => a.id !== id); delete c.workspace.agents[id]; if (c.workspace.selectedAgentId === id) c.workspace.selectedAgentId = c.agents[0]?.id ?? null; });
+    await store.update(c => { c.agents = c.agents.filter(a => a.id !== id); c.workspace.tabs = c.workspace.tabs.filter(t => t.agentId !== id); if (c.workspace.activeTabId && !c.workspace.tabs.some(t => t.id === c.workspace.activeTabId)) c.workspace.activeTabId = c.workspace.tabs[0]?.id ?? null; });
     res.json({ ok: true });
   });
   app.post('/api/agents/probe', async (req, res) => { const agent = { ...agentInput.parse(req.body), id: randomUUID() }; res.json(await registry.for(agent).probe(agent)); });
@@ -121,7 +125,7 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
   });
   app.get('/api/agents/:id/session-titles', async (req, res) => {
     const agent = store.agent(req.params.id);
-    const tabs = store.get().workspace.agents[agent.id]?.tabs ?? [];
+    const tabs = store.get().workspace.tabs.filter(t => t.agentId === agent.id);
     const ids = [...new Set([...sessions.list(), ...tabs].filter(s => s.type === agent.type && s.connection === agent.connection && s.target === agent.target && s.configDir === agent.configDir && (s.initScriptKey ?? initScriptKey({ ...agent, initScript: '' })) === initScriptKey(agent) && s.agentSessionId).map(s => s.agentSessionId!))];
     res.json(ids.length ? await registry.for(agent).history(agent, 0, 100, false, undefined, ids.sort()) : { items: [], total: 0, warnings: [] });
   });
