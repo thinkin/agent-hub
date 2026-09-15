@@ -15,6 +15,7 @@ export interface SessionInfo {
   id: string; agentId: string; agentName: string; type: Agent['type']; connection: Agent['connection']; target: string; configDir: string;
   initScriptKey: string; agentSessionId?: string; cwd: string; status: 'running' | 'exited'; created: number; exitCode?: number;
 }
+export type SessionIdListener = (session: SessionInfo, agentSessionId: string) => void;
 export class Session {
   readonly info: SessionInfo;
   private terminal = new Terminal({ cols: 100, rows: 30, scrollback: 1500, allowProposedApi: true });
@@ -32,14 +33,14 @@ export class Session {
   private transportClosed = false;
   private idleTimer?: NodeJS.Timeout;
   private idController = new AbortController();
-  constructor(agent: Agent, cwd: string, plan: LaunchPlan, factory: TerminalFactory) {
+  constructor(agent: Agent, cwd: string, plan: LaunchPlan, factory: TerminalFactory, onSessionId?: SessionIdListener) {
     this.info = { id: randomUUID(), agentId: agent.id, agentName: agent.name, type: agent.type, connection: agent.connection, target: agent.target, configDir: agent.configDir, initScriptKey: initScriptKey(agent), agentSessionId: plan.agentSessionId, cwd, status: 'running', created: Date.now() };
     this.terminal.loadAddon(this.serializer);
     this.process = factory(agent, plan.command, 100, 30);
     // Adopt the agent-minted thread id in the background; the terminal is usable immediately
     // whether or not the id ever resolves, so a slow first message never blocks or fails launch.
     if (plan.resolveSessionId) plan.resolveSessionId(this.idController.signal).then(id => {
-      if (id && !this.disposed) this.info.agentSessionId = id;
+      if (id && !this.disposed) { this.info.agentSessionId = id; onSessionId?.({ ...this.info }, id); }
     }).catch(() => {});
     this.terminal.onData(data => {
       if (!this.viewer && !this.transportClosed && !this.disposed) this.process.write(data);
@@ -135,8 +136,10 @@ export class Session {
 export class Sessions {
   private sessions = new Map<string, Session>();
   private creationQueues = new Map<string, Promise<unknown>>();
+  private sessionIdListener?: SessionIdListener;
   constructor(private factory: TerminalFactory = spawnTerminal, private registry?: AgentRegistry) {}
   setRegistry(registry: AgentRegistry) { this.registry ??= registry; }
+  setSessionIdListener(listener: SessionIdListener) { this.sessionIdListener = listener; }
   list() {
     for (const [id, session] of this.sessions) if (session.isDisposed()) this.sessions.delete(id);
     return [...this.sessions.values()].map(s => ({ ...s.info }));
@@ -156,7 +159,7 @@ export class Sessions {
       const duplicate = agentSessionId && this.find(agent, agentSessionId);
       if (duplicate) return duplicate;
       const plan = await this.registry!.for(agent).prepareLaunch(agent, cwd, agentSessionId, picker);
-      const session = new Session(agent, cwd, plan, this.factory);
+      const session = new Session(agent, cwd, plan, this.factory, (info, id) => this.sessionIdListener?.(info, id));
       this.sessions.set(session.info.id, session);
       return session;
     });

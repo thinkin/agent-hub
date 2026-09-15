@@ -20,9 +20,10 @@ export class TraexAdapter extends BaseAgentAdapter {
     // pre-assigned id and adopt the real one via backfill, matching Codex.
     const option = sessionId ? `resume ${quote(sessionId)}` : picker ? 'resume' : '';
     const command = this.inDirectory(agent, cwd, `exec -- ${this.executable(agent)} ${option}`.trimEnd());
+    const tracking = !sessionId && !picker ? this.prepareThreadTracking(agent, cwd) : undefined;
     return {
       command, agentSessionId: sessionId,
-      resolveSessionId: !sessionId && !picker ? (signal: AbortSignal) => this.trackNewThread(agent, cwd, signal) : undefined,
+      resolveSessionId: tracking ? async (signal: AbortSignal) => (await tracking)(signal) : undefined,
     };
   }
 }

@@ -10,6 +10,7 @@ export abstract class BaseAgentAdapter implements AgentAdapter {
   abstract readonly label: string;
   abstract readonly defaultExecutable: string;
   private cache = new Map<string, { expires: number; value: Promise<HistoryResult> }>();
+  private adoptedThreads = new Set<string>();
   private queue = Promise.resolve();
   protected controller = new AbortController();
 
@@ -58,25 +59,31 @@ export abstract class BaseAgentAdapter implements AgentAdapter {
 
   close() { this.controller.abort(); this.cache.clear(); }
 
-  // Codex and TraeX generate their own thread id and only persist it after the first
-  // user message, so a launched session has no id up front. Poll history until a new
-  // thread for this cwd appears, then adopt its id. Never throws — an unresolved id just
-  // leaves the session without a title/resume handle until the user actually talks.
-  protected async trackNewThread(agent: Agent, cwd: string, signal: AbortSignal) {
+  // Snapshot before spawning the CLI: a fast first message can otherwise create the
+  // thread before post-spawn tracking takes its baseline and make it look pre-existing.
+  protected async prepareThreadTracking(agent: Agent, cwd: string) {
+    const launchedAfter = Date.now() / 1000;
     const list = async () => {
       try { return (await this.history(agent, 0, 100, true)).items; }
       catch { return undefined; }
     };
     const before = new Set((await list())?.map(item => item.id));
-    while (!signal.aborted) {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      if (signal.aborted) return undefined;
-      const items = await list();
-      if (!items) continue;
-      const candidates = items.filter(item => !before.has(item.id));
-      const found = candidates.find(item => item.cwd === cwd) ?? (candidates.length === 1 ? candidates[0] : undefined);
-      if (found) return found.id;
-    }
-    return undefined;
+    let resolvedCwd = cwd;
+    try {
+      const output = await this.run(agent, this.inDirectory(agent, cwd, 'pwd -P'), '', this.controller.signal);
+      resolvedCwd = output.trim().split('\n').at(-1) || cwd;
+    } catch {}
+    return async (signal: AbortSignal) => {
+      while (!signal.aborted) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        if (signal.aborted) return undefined;
+        const items = await list();
+        if (!items) continue;
+        const candidates = items.filter(item => (!before.has(item.id) || (item.created ?? 0) >= launchedAfter) && !this.adoptedThreads.has(item.id));
+        const found = candidates.find(item => item.cwd === resolvedCwd) ?? (candidates.length === 1 ? candidates[0] : undefined);
+        if (found) { this.adoptedThreads.add(found.id); return found.id; }
+      }
+      return undefined;
+    };
   }
 }

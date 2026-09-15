@@ -16,6 +16,7 @@ import { ConfigStore, agentInput, hostKey } from '../src/config.js';
 import { Sessions } from '../src/sessions.js';
 import { ClaudeAdapter } from '../src/agents/claude.js';
 import { AgentRegistry } from '../src/agents/registry.js';
+import type { AgentAdapter } from '../src/agents/types.js';
 import { createApp } from '../src/server.js';
 
 const cliPath = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
@@ -91,16 +92,26 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
   const directory = await mkdtemp(join(tmpdir(), 'mam-server-'));
   const store = await new ConfigStore(directory).load();
   const agent = { ...agentInput.parse({ name: 'Test agent', target: 'test-host' }), id: randomUUID() };
-  await store.update(c => c.agents.push(agent));
+  const codexAgent = { ...agentInput.parse({ name: 'Test Codex', type: 'codex', target: 'test-host', executable: 'codex' }), id: randomUUID() };
+  await store.update(c => c.agents.push(agent, codexAgent));
   let spawns = 0;
   const sessions = new Sessions((_agent, _command, cols, rows) => { spawns++; return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "PTY READY\\n"; while IFS= read -r line; do printf "REPLY:%s\\n" "$line"; done'], { cols, rows, name: 'xterm-256color' }); });
   const historicalId = randomUUID();
   const claude = new ClaudeAdapter(async () => '__AGENT_HUB_JSON__' + JSON.stringify({ items: [{ id: historicalId, cwd: '/existing', title: 'Old chat', modified: 1000 }], total: 1, warnings: [] }));
+  let resolveThread!: (id: string) => void;
+  const threadId = new Promise<string>(resolve => { resolveThread = resolve; });
+  const codex: AgentAdapter = {
+    type: 'codex', label: 'Codex', defaultExecutable: 'codex',
+    async probe() { return { ok: true, message: 'ok' }; },
+    async history() { return { items: [], total: 0, warnings: [] }; },
+    async prepareLaunch() { return { command: 'codex', resolveSessionId: () => threadId }; },
+    close() {},
+  };
   const discoverRun = async (probe: { target: string }, command: string) => {
     assert.match(command, /command -v 'claude'/);
     return probe.target === 'scan-host' ? '__AGENT_HUB_HOST__ scanbox\n__AGENT_HUB_PYTHON__\n__AGENT_HUB_FOUND__ claude-code /opt/claude\n' : '__AGENT_HUB_HOST__ barebox\n';
   };
-  const app = await createApp({ store, sessions, registry: new AgentRegistry([claude], discoverRun) });
+  const app = await createApp({ store, sessions, registry: new AgentRegistry([claude, codex], discoverRun) });
   const origin = await app.listen(0);
   const sockets: WebSocket[] = [];
   try {
@@ -138,6 +149,22 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
     assert.equal(workspace.tabs[0].agentId, agent.id);
     assert.equal(workspace.activeTabId, tabId);
     assert.deepEqual((await new ConfigStore(directory).load()).get().workspace, workspace);
+    // Codex/TraeX mint their thread id after the tab is already open. Persist that
+    // backfill so a service restart can still resolve the tab title and resume it.
+    const codexSession = await (await request('/sessions', 'POST', { agentId: codexAgent.id })).json();
+    await request('/workspace', 'PATCH', { action: 'open', agentId: codexAgent.id, sessionId: codexSession.id });
+    assert.equal(store.get().workspace.tabs.find(tab => tab.sessionId === codexSession.id)?.agentSessionId, undefined);
+    const generatedThreadId = randomUUID(); resolveThread(generatedThreadId);
+    await assert.doesNotReject(async () => {
+      for (let attempt = 0; attempt < 50; attempt++) {
+        if (store.get().workspace.tabs.find(tab => tab.sessionId === codexSession.id)?.agentSessionId === generatedThreadId) return;
+        await delay(10);
+      }
+      throw new Error('thread id was not persisted');
+    });
+    assert.equal((await new ConfigStore(directory).load()).get().workspace.tabs.find(tab => tab.sessionId === codexSession.id)?.agentSessionId, generatedThreadId);
+    const codexTabId = store.get().workspace.tabs.find(tab => tab.sessionId === codexSession.id)!.id;
+    await request('/workspace', 'PATCH', { action: 'close', tabId: codexTabId });
     const stranger = { ...agent, id: randomUUID(), target: 'other-host' };
     await store.update(c => c.agents.push(stranger));
     assert.equal((await request('/workspace', 'PATCH', { action: 'open', agentId: stranger.id, sessionId: session.id })).status, 500);
@@ -152,7 +179,7 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
     first.close(); await once(first, 'close');
     assert.equal(sessions.get(session.id)?.info.status, 'running');
     const second = connect(); const snapshot = await nextMessage(second, v => v.type === 'snapshot');
-    assert.match(snapshot.data, /REPLY:hello/); assert.equal(spawns, 1);
+    assert.match(snapshot.data, /REPLY:hello/); assert.equal(spawns, 2);
     const blocked = connect(); const [code] = await once(blocked, 'close'); assert.equal(code, 4001);
     const transferred = once(second, 'close');
     const third = connect(true); await nextMessage(third, v => v.type === 'snapshot'); assert.equal((await transferred)[0], 4001);

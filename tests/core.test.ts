@@ -129,7 +129,8 @@ test('shell quoting prevents command expansion and preserves paths', () => {
 });
 
 test('agent adapters encapsulate native launch and resume commands', async () => {
-  const claude = new ClaudeAdapter(), codex = new CodexAdapter(), traex = new TraexAdapter();
+  const trackerRun = async (_agent: unknown, command: string) => command.includes('pwd -P') ? '/work\n' : '__AGENT_HUB_JSON__' + JSON.stringify({ items: [], total: 0, warnings: [] });
+  const claude = new ClaudeAdapter(), codex = new CodexAdapter(trackerRun), traex = new TraexAdapter(trackerRun);
   const id = randomUUID();
   try {
     const claudePlan = await claude.prepareLaunch(agent, '/work');
@@ -146,6 +147,24 @@ test('agent adapters encapsulate native launch and resume commands', async () =>
     const traexResume = await traex.prepareLaunch(traexAgent, '/work', id);
     assert.match(traexResume.command, new RegExp(`'traex' resume '${id}'`)); assert.equal(traexResume.agentSessionId, id);
   } finally { claude.close(); codex.close(); traex.close(); }
+});
+
+test('Codex snapshots threads before launch and resolves home-directory cwd aliases', async () => {
+  const threadId = randomUUID();
+  let historyReads = 0;
+  const codexAgent = { ...agent, type: 'codex' as const, executable: 'codex' };
+  const codex = new CodexAdapter(async (_agent, command) => {
+    if (command.includes('pwd -P')) return '/Users/tester\n';
+    historyReads++;
+    // Simulate the CLI creating its thread before the pre-launch history snapshot returns.
+    const items = [{ id: threadId, cwd: '/Users/tester', title: 'New thread', modified: 1, created: Date.now() / 1000 + 1 }];
+    return '__AGENT_HUB_JSON__' + JSON.stringify({ items, total: items.length, warnings: [] });
+  });
+  try {
+    const plan = await codex.prepareLaunch(codexAgent, '~');
+    assert.equal(await plan.resolveSessionId!(new AbortController().signal), threadId);
+    assert.equal(historyReads, 2);
+  } finally { codex.close(); }
 });
 
 test('Codex and TraeX history reads their structured thread databases', async () => {

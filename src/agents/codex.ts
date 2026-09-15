@@ -17,9 +17,10 @@ export class CodexAdapter extends BaseAgentAdapter {
   async prepareLaunch(agent: Agent, cwd: string, sessionId?: string, picker = false) {
     const option = sessionId ? `resume ${quote(sessionId)}` : picker ? 'resume' : '';
     const command = this.inDirectory(agent, cwd, `exec -- ${this.executable(agent)} ${option}`.trimEnd());
+    const tracking = !sessionId && !picker ? this.prepareThreadTracking(agent, cwd) : undefined;
     return {
       command, agentSessionId: sessionId,
-      resolveSessionId: !sessionId && !picker ? (signal: AbortSignal) => this.trackNewThread(agent, cwd, signal) : undefined,
+      resolveSessionId: tracking ? async (signal: AbortSignal) => (await tracking)(signal) : undefined,
     };
   }
 }

@@ -279,6 +279,13 @@ export default function App() {
   const agentOf = (tab: WorkspaceTab | undefined) => tab ? config.agents.find(a => a.id === tab.agentId) : undefined;
   const activeAgent = agentOf(active);
   const activeSession = active && activeAgent ? tabSession(active, activeAgent, sessions) : undefined;
+  const mountedTerminalTabs = useRef(new Set<string>());
+  if (activeSession && active) mountedTerminalTabs.current.add(active.id);
+  const mountedTerminals = tabs.flatMap(tab => {
+    if (!mountedTerminalTabs.current.has(tab.id)) return [];
+    const agent = agentOf(tab), session = agent ? tabSession(tab, agent, sessions) : undefined;
+    return session ? [{ tab, session }] : [];
+  });
   const launcherAgent = config.agents.find(a => a.id === launcherAgentId) ?? config.agents[0];
   const tabAgentIds = [...new Set(tabs.map(t => t.agentId))].filter(id => config.agents.some(a => a.id === id));
   const tabAgentKey = [...tabAgentIds].sort().join(',');
@@ -427,7 +434,8 @@ export default function App() {
       {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
       {titleError && <p className="sync-warning">{titleError}</p>}
       {active ? <section className="active-workspace" id="terminal-panel" role="tabpanel" aria-labelledby={`tab-${active.id}`}>
-        {activeSession ? <Suspense fallback={<div className="loading">加载终端…</div>}><Terminal key={activeSession.id} sessionId={activeSession.id} theme={theme} /></Suspense> : <div className="empty-workspace"><h2>{titleFor(active)}</h2><p className="subtle">{changedEnvironment ? 'Agent 环境已更改，无法在当前环境恢复此 tab。' : active.agentSessionId ? busy ? '正在恢复 Agent 对话…' : 'Agent 对话暂未运行，点击当前 tab 可重试。' : '历史选择器没有可靠的对话标识，请重新打开对话。'}</p></div>}
+        {mountedTerminals.map(({ tab, session }) => <Suspense key={tab.id} fallback={tab.id === active.id ? <div className="loading">加载终端…</div> : null}><Terminal sessionId={session.id} theme={theme} active={tab.id === active.id} /></Suspense>)}
+        {!activeSession && <div className="empty-workspace"><h2>{titleFor(active)}</h2><p className="subtle">{changedEnvironment ? 'Agent 环境已更改，无法在当前环境恢复此 tab。' : active.agentSessionId ? busy ? '正在恢复 Agent 对话…' : 'Agent 对话暂未运行，点击当前 tab 可重试。' : '历史选择器没有可靠的对话标识，请重新打开对话。'}</p></div>}
       </section> : launcherAgent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher agents={config.agents} agent={launcherAgent} onAgentChange={setLauncherAgentId} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} recentCwds={config.recentCwds} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
     </main>
     {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onRegister={() => { setManaging(false); setRegistering(true); }} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}

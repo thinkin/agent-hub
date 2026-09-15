@@ -25,12 +25,13 @@ test('agent tabs persist across browsers and service restarts without eager proc
     spawns++; commands.push(command);
     const id = /--session-id '([^']+)'/.exec(command)?.[1];
     if (id) records.set(id, { id, cwd: '/srv/project', title: '修复终端刷新问题', modified: 1789200002 });
-    return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "CLAUDE TERMINAL TEST\\n"; while IFS= read -r line; do if [ "$line" = exit ]; then break; fi; printf "REPLY:%s\\n" "$line"; done'], { cols, rows, name: 'xterm-256color' });
+    return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "CLAUDE TERMINAL TEST\\n"; while IFS= read -r line; do if [ "$line" = exit ]; then break; fi; if [ "$line" = scrollback ]; then i=1; while [ "$i" -le 200 ]; do printf "SCROLLBACK:%03d\\n" "$i"; i=$((i + 1)); done; else printf "REPLY:%s\\n" "$line"; fi; done'], { cols, rows, name: 'xterm-256color' });
   });
   const createClaude = () => new ClaudeAdapter(async (agent, command) => {
     if (agent.target === 'unreachable') throw new Error('SSH connection refused (test)');
     if (agent.initScript) expect(command).toContain('eval ');
     if (command.includes('--help')) return '--session-id --resume\nPython 3.12';
+    if (command.endsWith('pwd -P')) return '/srv/project\n';
     const options = JSON.parse(command.slice(command.indexOf("python3 - '") + "python3 - '".length, command.lastIndexOf("'")));
     const all = [...records.values()];
     const matching = options.sessionId ? all.filter(item => item.id === options.sessionId) : options.sessionIds ? all.filter(item => options.sessionIds.includes(item.id)) : all;
@@ -49,6 +50,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
   const chooseAgent = async (name: string) => { await page.getByRole('dialog', { name: '打开对话' }).getByRole('combobox', { name: '选择 Agent' }).click(); await page.getByRole('option', { name, exact: true }).click(); };
   const chooseLauncherAgent = async (name: string) => { await page.getByRole('region', { name: '打开对话' }).getByRole('combobox', { name: '选择 Agent' }).click(); await page.getByRole('option', { name, exact: true }).click(); };
   const activeTab = () => page.getByRole('tab', { selected: true });
+  const activeTerminal = () => page.locator('.terminal-panel:not([hidden])');
   try {
     await page.goto(`${origin}/#token=${app.token}`);
     await expect(page.locator('.sidebar, .statusbar, .list-footer')).toHaveCount(0);
@@ -85,7 +87,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.screenshot({ path: testInfo.outputPath('empty.png'), fullPage: true });
     await expect(page.locator('.tab-actions button')).toHaveCount(0);
     await page.getByRole('button', { name: '启动 Claude Code', exact: true }).click();
-    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
+    await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     await expect(page.locator('.tab-actions button')).toHaveCount(1);
     await expect(page.getByRole('button', { name: '添加对话' })).toHaveText('+');
     await page.getByRole('radio', { name: '浅色' }).click();
@@ -100,7 +102,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await openPicker();
     await page.getByRole('dialog', { name: '打开对话' }).getByRole('button', { name: /接入之前已有的对话/ }).click();
     await expect(activeTab()).toContainText('接入之前已有的对话');
-    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
+    await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     expect(commands.at(-1)).toContain(`--resume '${historyId}'`);
     await expect(page.getByRole('tab')).toHaveCount(2);
     await openPicker();
@@ -112,13 +114,23 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await expect(page.getByRole('tab')).toHaveCount(2);
     expect(spawns).toBe(2);
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).click();
-    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
+    await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     await expect(activeTab()).toContainText('修复终端刷新问题');
+    await page.locator('.terminal-panel:not([hidden]) .xterm-helper-textarea').fill('scrollback');
+    await page.locator('.terminal-panel:not([hidden]) .xterm-helper-textarea').press('Enter');
+    await expect(page.locator('.terminal-panel:not([hidden]) .xterm-screen')).toContainText('SCROLLBACK:200');
+    const bottom = await page.locator('.terminal-panel:not([hidden]) .xterm-viewport').evaluate(element => ({ top: element.scrollTop, max: element.scrollHeight - element.clientHeight }));
+    expect(bottom.top).toBeGreaterThan(0);
+    expect(Math.abs(bottom.max - bottom.top)).toBeLessThan(2);
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).press('ArrowRight');
     await expect(activeTab()).toContainText('接入之前已有的对话');
+    await page.getByRole('tab', { name: /修复终端刷新问题/ }).click();
+    const restoredBottom = await page.locator('.terminal-panel:not([hidden]) .xterm-viewport').evaluate(element => ({ top: element.scrollTop, max: element.scrollHeight - element.clientHeight }));
+    expect(Math.abs(restoredBottom.max - restoredBottom.top)).toBeLessThan(2);
+    await page.getByRole('tab', { name: /接入之前已有的对话/ }).click();
     await page.reload();
     await expect(activeTab()).toContainText('接入之前已有的对话');
-    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
+    await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     expect(spawns).toBe(2);
     await page.screenshot({ path: testInfo.outputPath('tabs.png'), fullPage: true });
 
@@ -159,11 +171,12 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await openPicker();
     await chooseAgent('Dev Claude');
     await page.getByRole('button', { name: /修复终端刷新问题.*活跃/ }).click();
-    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
+    await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     expect(spawns).toBe(2);
     await expect.poll(() => store.get().workspace.tabs.filter(tab => tab.agentId === agentId).map(tab => tab.agentSessionId)).toEqual([historyId, firstSession.agentSessionId]);
     await expect(activeTab()).toContainText('修复终端刷新问题');
-    await expect(page.locator('.xterm-screen')).toContainText('REPLY:browser-input');
+    await activeTerminal().locator('.xterm-viewport').evaluate(element => { element.scrollTop = 0; element.dispatchEvent(new Event('scroll')); });
+    await expect(activeTerminal().locator('.xterm-screen')).toContainText('REPLY:browser-input');
     expect(deletes).toEqual([]);
 
     const savedWorkspace = store.get().workspace;
@@ -174,7 +187,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.goto(`${origin}/#token=${app.token}`);
     await expect(page.getByRole('tab')).toHaveCount(3);
     await expect(activeTab()).toContainText('修复终端刷新问题');
-    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
+    await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     expect(store.get().workspace).toEqual(savedWorkspace);
     expect(spawns).toBe(2);
     await page.setViewportSize({ width: 390, height: 720 });
@@ -201,7 +214,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.goto(`${origin}/#token=${app.token}`);
     await expect(page.getByRole('tab')).toHaveCount(4);
     await expect(activeTab()).toContainText('修复终端刷新问题');
-    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
+    await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     await expect(page.getByRole('button', { name: '恢复对话' })).toHaveCount(0);
     expect(sessions.list()).toHaveLength(1);
     expect(spawns).toBe(beforeResume + 1);
@@ -212,7 +225,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await expect(page.getByRole('alert')).toContainText('Agent 历史已删除');
     expect(spawns).toBe(beforeResume + 1);
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).click();
-    await expect(page.locator('.terminal-panel[data-state="connected"]')).toBeVisible();
+    await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     expect(spawns).toBe(beforeResume + 1);
     await expect(page.getByRole('tab')).toHaveCount(4);
     await page.locator('.xterm-helper-textarea').fill('exit');

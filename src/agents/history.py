@@ -33,7 +33,7 @@ def records(path):
 
 
 def claude_summary(path, modified):
-    result = {"id": path.stem, "cwd": "", "title": "", "modified": modified}
+    result = {"id": path.stem, "cwd": "", "title": "", "modified": modified, "created": modified}
     custom, generated = "", ""
     for item in records(path):
         if item.get("isSidechain"): continue
@@ -97,9 +97,10 @@ def sqlite_history(options):
         title_parts = [name for name in ("name", "title", "preview", "first_user_message") if name in columns]
         title = "COALESCE(%s, '')" % ", ".join("NULLIF(%s, '')" % name for name in title_parts)
         modified = "COALESCE(updated_at_ms / 1000.0, updated_at)" if "updated_at_ms" in columns else "updated_at"
+        created = "COALESCE(created_at_ms / 1000.0, created_at)" if "created_at_ms" in columns and "created_at" in columns else "created_at_ms / 1000.0" if "created_at_ms" in columns else "created_at" if "created_at" in columns else modified
         total = connection.execute("SELECT COUNT(*) FROM threads WHERE " + where, values).fetchone()[0]
-        rows = connection.execute(f"SELECT id, cwd, {title} AS title, {modified} AS modified FROM threads WHERE {where} ORDER BY {modified} DESC, id DESC LIMIT ? OFFSET ?", values + [limit, offset])
-        items = [{"id": row["id"], "cwd": row["cwd"] or "", "title": " ".join((row["title"] or "").split())[:180], "modified": float(row["modified"])} for row in rows if identifier(row["id"])]
+        rows = connection.execute(f"SELECT id, cwd, {title} AS title, {modified} AS modified, {created} AS created FROM threads WHERE {where} ORDER BY {modified} DESC, id DESC LIMIT ? OFFSET ?", values + [limit, offset])
+        items = [{"id": row["id"], "cwd": row["cwd"] or "", "title": " ".join((row["title"] or "").split())[:180], "modified": float(row["modified"]), "created": float(row["created"])} for row in rows if identifier(row["id"])]
         return {"items": items, "total": total, "warnings": []}
     finally: connection.close()
 

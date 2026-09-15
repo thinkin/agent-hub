@@ -17,6 +17,14 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
   const registry = options.registry ?? new AgentRegistry();
   const sessions = options.sessions ?? new Sessions(undefined, registry);
   sessions.setRegistry(registry);
+  sessions.setSessionIdListener((session, agentSessionId) => {
+    const tab = store.get().workspace.tabs.find(tab => tab.sessionId === session.id);
+    if (!tab || tab.agentSessionId === agentSessionId) return;
+    void store.update(config => {
+      const current = config.workspace.tabs.find(tab => tab.sessionId === session.id);
+      if (current) current.agentSessionId = agentSessionId;
+    }).catch(() => {});
+  });
   const token = randomBytes(32).toString('hex');
   const cookie = randomBytes(32).toString('hex');
   const cookieName = `mam_${randomBytes(6).toString('hex')}`;

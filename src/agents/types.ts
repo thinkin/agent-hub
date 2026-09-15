@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { Agent } from '../config.js';
 
-export const historyItem = z.object({ id: z.string().uuid(), cwd: z.string(), title: z.string(), modified: z.number() });
+export const historyItem = z.object({ id: z.string().uuid(), cwd: z.string(), title: z.string(), modified: z.number(), created: z.number().optional() });
 export const historyResult = z.object({ items: z.array(historyItem), total: z.number(), warnings: z.array(z.string()) });
 export type HistoryResult = z.infer<typeof historyResult>;
 

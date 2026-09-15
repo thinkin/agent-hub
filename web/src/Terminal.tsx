@@ -4,9 +4,12 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { themes, type ThemeName } from './theme';
 
-export default function Terminal({ sessionId, theme }: { sessionId: string; theme: ThemeName }) {
+export default function Terminal({ sessionId, theme, active }: { sessionId: string; theme: ThemeName; active: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerminal | null>(null);
+  const activeRef = useRef(active);
+  const resizeRef = useRef<(() => void) | null>(null);
+  activeRef.current = active;
   const [state, setState] = useState('连接终端…');
   const [attempt, setAttempt] = useState(0);
   const takeover = useRef(false);
@@ -18,10 +21,15 @@ export default function Terminal({ sessionId, theme }: { sessionId: string; them
     let disposed = false, ready = false, reconnect: ReturnType<typeof setTimeout> | undefined;
     let ws: WebSocket;
     const resize = () => {
-      if (!ready || disposed) return;
+      if (!ready || disposed || !activeRef.current) return;
+      const viewportY = terminal.buffer.active.viewportY;
+      const wasAtBottom = viewportY === terminal.buffer.active.baseY;
       fit.fit();
+      if (wasAtBottom) terminal.scrollToBottom();
+      else terminal.scrollToLine(Math.min(viewportY, terminal.buffer.active.baseY));
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols: Math.min(500, Math.max(20, terminal.cols)), rows: Math.min(200, Math.max(5, terminal.rows)) }));
     };
+    resizeRef.current = resize;
     const connect = () => {
       ready = false; setState('连接终端…');
       ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/terminal/${sessionId}?takeover=${takeover.current}`);
@@ -33,7 +41,8 @@ export default function Terminal({ sessionId, theme }: { sessionId: string; them
           terminal.reset(); terminal.resize(message.cols, message.rows);
           terminal.write(message.data, () => {
             if (disposed) return;
-            ready = true; resize(); terminal.scrollToBottom(); terminal.focus();
+            ready = true; resize(); terminal.scrollToBottom();
+            if (activeRef.current) terminal.focus();
             setState(message.status === 'exited' ? 'Agent 进程已退出' : '已连接');
           });
         } else if (message.type === 'output') terminal.write(message.data);
@@ -58,14 +67,19 @@ export default function Terminal({ sessionId, theme }: { sessionId: string; them
     const observer = new ResizeObserver(resize); observer.observe(host.current!);
     connect();
     return () => {
-      disposed = true; terminalRef.current = null; clearTimeout(reconnect); observer.disconnect(); input.dispose();
+      disposed = true; terminalRef.current = null; resizeRef.current = null; clearTimeout(reconnect); observer.disconnect(); input.dispose();
       if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => ws.close();
       else if (ws.readyState === WebSocket.OPEN) ws.close();
       terminal.dispose();
     };
   }, [sessionId, attempt]);
+  useEffect(() => {
+    if (!active) return;
+    const frame = requestAnimationFrame(() => { resizeRef.current?.(); terminalRef.current?.focus(); });
+    return () => cancelAnimationFrame(frame);
+  }, [active]);
   useEffect(() => { if (terminalRef.current) terminalRef.current.options.theme = themes[theme].terminal; }, [theme]);
-  return <div className="terminal-panel" data-state={state === '已连接' ? 'connected' : 'other'}>
+  return <div className="terminal-panel" data-state={state === '已连接' ? 'connected' : 'other'} hidden={!active}>
     {state !== '已连接' && <div className="terminal-status"><span className="muted-dot" />{state}
       {state === '此终端由其他页面控制' && <button onClick={() => { takeover.current = true; setAttempt(x => x + 1); }}>接管终端</button>}
     </div>}
