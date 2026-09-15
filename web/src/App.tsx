@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { api, mergeConversations, sameEnvironment, tabSession, type Agent, type AgentType, type Config, type Conversation, type DiscoverResult, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
+import { api, mergeConversations, sameEnvironment, tabSession, hostKey, type Agent, type AgentType, type Config, type Conversation, type DiscoverResult, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
 import { applyTheme, storedTheme, type ThemeName } from './theme';
 const Terminal = lazy(() => import('./Terminal'));
 const emptyAgent = { name: '', type: 'claude-code' as const, connection: 'ssh' as const, target: '', cwd: '~', executable: 'claude', configDir: '', initScript: '' };
@@ -60,6 +60,37 @@ function AgentSwitcher({ agents, selected, disabled, onSelect }: { agents: Agent
       {selected ? <><AgentIcon type={selected.type} size={18} labelled={false} /><span>{selected.name} - {selected.target}</span></> : <span>未配置</span>}<span className="agent-chevron" aria-hidden="true">⌄</span>
     </button>
     {open && <div className="agent-menu" id="agent-options" role="listbox" aria-label="Agents">{orderedGroups.map(([key, group]) => <div className="agent-group" role="group" aria-label={group.label} key={key}><div className="agent-group-label">{group.label}</div>{group.agents.map(item => { const index = orderedAgents.indexOf(item); return <button id={`agent-option-${item.id}`} type="button" role="option" aria-selected={item.id === selected?.id} className={`agent-option ${index === focused ? 'focused' : ''}`} key={item.id} onMouseEnter={() => setFocused(index)} onClick={() => choose(item)}><AgentIcon type={item.type} size={19} labelled={false} /><span>{item.name}</span>{item.id === selected?.id && <span className="agent-check" aria-hidden="true">✓</span>}</button>; })}</div>)}</div>}
+  </div>;
+}
+
+function DirectoryInput({ value, onChange, suggestions, pristine, required }: { value: string; onChange(value: string): void; suggestions: string[]; pristine?: string; required?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [focused, setFocused] = useState(-1);
+  const root = useRef<HTMLDivElement>(null);
+  const query = value.trim().toLocaleLowerCase();
+  // Show the full host history until the user edits away from the prefilled value; once they type, narrow by substring.
+  const untouched = !query || query === (pristine ?? '').trim().toLocaleLowerCase();
+  const filtered = untouched ? suggestions : suggestions.filter(item => item.toLocaleLowerCase().includes(query));
+  const showable = !untouched && filtered.length === 1 && filtered[0].toLocaleLowerCase() === query ? [] : filtered;
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', close);
+    return () => document.removeEventListener('pointerdown', close);
+  }, [open]);
+  const choose = (item: string) => { onChange(item); setOpen(false); setFocused(-1); };
+  const keyDown = (event: React.KeyboardEvent) => {
+    if (event.key === 'Escape') { if (open) { event.stopPropagation(); setOpen(false); } return; }
+    if (!showable.length) return;
+    if (event.key === 'ArrowDown') { event.preventDefault(); setOpen(true); setFocused(value => (value + 1) % showable.length); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); setOpen(true); setFocused(value => (value <= 0 ? showable.length : value) - 1); }
+    else if (event.key === 'Enter' && open && focused >= 0 && showable[focused]) { event.preventDefault(); choose(showable[focused]); }
+  };
+  return <div className="cwd-field" ref={root}>
+    <input role="combobox" required={required} value={value} spellCheck={false} autoComplete="off" aria-expanded={open && showable.length > 0} aria-controls="cwd-options" aria-autocomplete="list" aria-activedescendant={open && showable[focused] ? `cwd-option-${focused}` : undefined}
+      onChange={event => { onChange(event.target.value); setOpen(true); setFocused(-1); }} onFocus={() => setOpen(true)} onKeyDown={keyDown} />
+    {open && showable.length > 0 && <div className="cwd-menu" id="cwd-options" role="listbox" aria-label="历史工作目录">{showable.map((item, index) =>
+      <button type="button" id={`cwd-option-${index}`} role="option" aria-selected={index === focused} className={`cwd-option ${index === focused ? 'focused' : ''}`} key={item} onMouseEnter={() => setFocused(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(item)}>{item}</button>)}</div>}
   </div>;
 }
 
@@ -180,7 +211,7 @@ function AgentManager({ agents, onClose, onEdit, onRegister, onRemove }: { agent
   </dialog>;
 }
 
-function ConversationLauncher({ agents, agent, onAgentChange, sessions, titles, limit, busy, onOpen, onStart }: { agents: Agent[]; agent: Agent; onAgentChange(id: string): void; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; onOpen(agentId: string, row: Conversation): Promise<void>; onStart(agentId: string, cwd: string): Promise<void> }) {
+function ConversationLauncher({ agents, agent, onAgentChange, sessions, titles, limit, busy, recentCwds, onOpen, onStart }: { agents: Agent[]; agent: Agent; onAgentChange(id: string): void; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; recentCwds: Record<string, string[]>; onOpen(agentId: string, row: Conversation): Promise<void>; onStart(agentId: string, cwd: string): Promise<void> }) {
   const [history, setHistory] = useState<History>(emptyHistory), [query, setQuery] = useState('');
   const [cwd, setCwd] = useState(agent.cwd), [loading, setLoading] = useState(false), [error, setError] = useState('');
   const offset = useRef(0), request = useRef<AbortController | undefined>(undefined);
@@ -204,7 +235,7 @@ function ConversationLauncher({ agents, agent, onAgentChange, sessions, titles, 
     <section className="new-conversation" aria-labelledby="new-conversation-heading">
       <div className="launcher-heading"><div><h3 id="new-conversation-heading">新建对话</h3><p>在 {agent.name} 启动新的 {agentTypes[agent.type].label}</p></div></div>
       <form onSubmit={event => { event.preventDefault(); void start(); }}>
-        <label>工作目录<input required value={cwd} onChange={event => setCwd(event.target.value)} spellCheck={false} /></label>
+        <label>工作目录<DirectoryInput value={cwd} onChange={setCwd} suggestions={recentCwds[hostKey(agent)] ?? []} pristine={agent.cwd} required /></label>
         <button type="submit" className="primary" disabled={busy}>{busy ? '正在连接…' : `启动 ${agentTypes[agent.type].label}`}</button>
       </form>
     </section>
@@ -222,17 +253,17 @@ function ConversationLauncher({ agents, agent, onAgentChange, sessions, titles, 
   </div>;
 }
 
-function ConversationPicker({ agents, agent, onAgentChange, sessions, titles, limit, busy, onClose, onOpen, onStart }: { agents: Agent[]; agent: Agent; onAgentChange(id: string): void; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; onClose(): void; onOpen(agentId: string, row: Conversation): Promise<void>; onStart(agentId: string, cwd: string): Promise<void> }) {
+function ConversationPicker({ agents, agent, onAgentChange, sessions, titles, limit, busy, recentCwds, onClose, onOpen, onStart }: { agents: Agent[]; agent: Agent; onAgentChange(id: string): void; sessions: Session[]; titles: HistoryItem[]; limit: number; busy: boolean; recentCwds: Record<string, string[]>; onClose(): void; onOpen(agentId: string, row: Conversation): Promise<void>; onStart(agentId: string, cwd: string): Promise<void> }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => { dialog.current?.showModal(); }, []);
   return <dialog className="conversation-dialog" ref={dialog} onCancel={onClose} aria-label="打开对话">
     <div className="dialog-heading"><h2>打开对话</h2><button className="icon-button" aria-label="关闭" onClick={onClose}>×</button></div>
-    <ConversationLauncher agents={agents} agent={agent} onAgentChange={onAgentChange} sessions={sessions} titles={titles} limit={limit} busy={busy} onOpen={onOpen} onStart={onStart} />
+    <ConversationLauncher agents={agents} agent={agent} onAgentChange={onAgentChange} sessions={sessions} titles={titles} limit={limit} busy={busy} recentCwds={recentCwds} onOpen={onOpen} onStart={onStart} />
   </dialog>;
 }
 
 export default function App() {
-  const [config, setConfig] = useState<Config>({ agents: [], historyLimit: 30, workspace: emptyWorkspace });
+  const [config, setConfig] = useState<Config>({ agents: [], historyLimit: 30, workspace: emptyWorkspace, recentCwds: {} });
   const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace);
   const [sessions, setSessions] = useState<Session[]>([]), [titles, setTitles] = useState<Record<string, HistoryItem[]>>({});
   const [ready, setReady] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [titleError, setTitleError] = useState('');
@@ -310,6 +341,7 @@ export default function App() {
     try {
       const session = await api<Session>('/sessions', 'POST', { agentId, ...input });
       await loadSessions(); await changeWorkspace({ action: 'open', agentId, sessionId: session.id }); setDialog(null);
+      if ('cwd' in input) setConfig(await api<Config>('/config'));
     } finally { launching.current = false; setBusy(false); }
   };
   const selectTab = async (id: string) => {
@@ -396,11 +428,11 @@ export default function App() {
       {titleError && <p className="sync-warning">{titleError}</p>}
       {active ? <section className="active-workspace" id="terminal-panel" role="tabpanel" aria-labelledby={`tab-${active.id}`}>
         {activeSession ? <Suspense fallback={<div className="loading">加载终端…</div>}><Terminal key={activeSession.id} sessionId={activeSession.id} theme={theme} /></Suspense> : <div className="empty-workspace"><h2>{titleFor(active)}</h2><p className="subtle">{changedEnvironment ? 'Agent 环境已更改，无法在当前环境恢复此 tab。' : active.agentSessionId ? busy ? '正在恢复 Agent 对话…' : 'Agent 对话暂未运行，点击当前 tab 可重试。' : '历史选择器没有可靠的对话标识，请重新打开对话。'}</p></div>}
-      </section> : launcherAgent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher agents={config.agents} agent={launcherAgent} onAgentChange={setLauncherAgentId} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
+      </section> : launcherAgent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher agents={config.agents} agent={launcherAgent} onAgentChange={setLauncherAgentId} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} recentCwds={config.recentCwds} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
     </main>
     {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onRegister={() => { setManaging(false); setRegistering(true); }} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}
     {registering && <AgentRegister agents={config.agents} onClose={() => setRegistering(false)} onDone={next => { setRegistering(false); act(api<Config>('/config').then(data => { setConfig(data); setWorkspace(next); })); }} onSaved={saved => { setRegistering(false); setLauncherAgentId(saved.id); act(api<Config>('/config').then(data => setConfig(data))); }} />}
     {modal !== undefined && <AgentForm agent={modal} onClose={() => setModal(undefined)} onSaved={saved => { setModal(undefined); setLauncherAgentId(saved.id); act(api<Config>('/config').then(data => setConfig(data))); }} />}
-    {dialog === 'open' && launcherAgent && <ConversationPicker key={launcherAgent.id} agents={config.agents} agent={launcherAgent} onAgentChange={setLauncherAgentId} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} onClose={() => setDialog(null)} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} />}
+    {dialog === 'open' && launcherAgent && <ConversationPicker key={launcherAgent.id} agents={config.agents} agent={launcherAgent} onAgentChange={setLauncherAgentId} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} recentCwds={config.recentCwds} onClose={() => setDialog(null)} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} />}
   </div>;
 }

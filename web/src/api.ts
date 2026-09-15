@@ -7,7 +7,8 @@ export function sameEnvironment(a: { type: AgentType; connection: 'ssh' | 'local
 }
 export interface AgentWorkspace { tabs: WorkspaceTab[]; activeTabId: string | null }
 export interface Workspace { tabs: WorkspaceTab[]; activeTabId: string | null }
-export interface Config { agents: Agent[]; historyLimit: number; workspace: Workspace }
+export interface Config { agents: Agent[]; historyLimit: number; workspace: Workspace; recentCwds: Record<string, string[]> }
+export function hostKey(agent: { connection: 'ssh' | 'local'; target: string }) { return `${agent.connection}:${agent.target}`; }
 export interface DiscoveredAgent { type: AgentType; label: string; executable: string; version: string }
 export interface DiscoverResult { hostname: string; python: boolean; agents: DiscoveredAgent[]; warnings: string[] }
 export function tabSession(tab: WorkspaceTab, agent: Agent, sessions: Session[]) {

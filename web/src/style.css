@@ -65,6 +65,10 @@ h1, h2, p { margin-top: 0; }
 .agent-option:hover, .agent-option.focused { background: var(--hover); }
 .agent-option[aria-selected="true"] { color: var(--strong); }
 .agent-check { margin-left: auto; color: var(--accent); }
+.cwd-field { position: relative; width: 100%; }
+.cwd-menu { position: absolute; z-index: 20; top: calc(100% + 5px); left: 0; width: 100%; max-height: min(240px, calc(100dvh - 120px)); overflow-y: auto; padding: 5px; border: 1px solid var(--dialog-border); border-radius: 4px; background: var(--surface); box-shadow: 0 14px 38px #0008; }
+.cwd-option { display: block; width: 100%; min-height: 32px; padding: 7px 9px; border: 0; border-radius: 3px; background: transparent; color: var(--strong); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cwd-option:hover, .cwd-option.focused { background: var(--hover); }
 .manage-button { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; flex-shrink: 0; color: var(--muted); background: transparent; border-color: transparent; }
 .manage-button:hover { color: var(--strong); }
 .tabbar { display: flex; min-width: 0; overflow: hidden; border-bottom: 1px solid var(--border); background: var(--surface); }

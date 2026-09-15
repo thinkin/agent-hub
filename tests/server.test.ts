@@ -12,7 +12,7 @@ import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
 import * as pty from 'node-pty';
-import { ConfigStore, agentInput } from '../src/config.js';
+import { ConfigStore, agentInput, hostKey } from '../src/config.js';
 import { Sessions } from '../src/sessions.js';
 import { ClaudeAdapter } from '../src/agents/claude.js';
 import { AgentRegistry } from '../src/agents/registry.js';
@@ -176,4 +176,56 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
     assert.equal(rejection, 403);
     await delay(20);
   } finally { for (const ws of sockets) ws.terminate(); await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('recent working directories are recorded per-host as an LRU capped at 20', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'mam-recent-cwds-'));
+  const store = await new ConfigStore(directory).load();
+  const agent = { ...agentInput.parse({ name: 'Test agent', target: 'test-host' }), id: randomUUID() };
+  const other = { ...agentInput.parse({ name: 'Other agent', target: 'other-host' }), id: randomUUID() };
+  await store.update(c => { c.agents.push(agent, other); });
+  const sessions = new Sessions((_agent, _command, cols, rows) => pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'sleep 30'], { cols, rows, name: 'xterm-256color' }));
+  const historicalId = randomUUID();
+  const claude = new ClaudeAdapter(async () => '__AGENT_HUB_JSON__' + JSON.stringify({ items: [{ id: historicalId, cwd: '/from-history', title: 'Old chat', modified: 1000 }], total: 1, warnings: [] }));
+  const app = await createApp({ store, sessions, registry: new AgentRegistry([claude]) });
+  const origin = await app.listen(0);
+  try {
+    const auth = await fetch(`${origin}/api/auth`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ token: app.token }) });
+    const cookie = auth.headers.get('set-cookie')!.split(';')[0];
+    const request = (path: string, method = 'GET', body?: unknown) => fetch(`${origin}/api${path}`, { method, headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    const recent = async () => (await (await request('/config')).json()).recentCwds as Record<string, string[]>;
+    const host = hostKey(agent);
+
+    // A new conversation with an explicit cwd is recorded under its host, most-recent first.
+    await request('/sessions', 'POST', { agentId: agent.id, cwd: '/tmp/alpha' });
+    await request('/sessions', 'POST', { agentId: agent.id, cwd: '/tmp/beta' });
+    assert.deepEqual((await recent())[host], ['/tmp/beta', '/tmp/alpha']);
+
+    // Re-using a directory de-duplicates and bumps it to the front.
+    await request('/sessions', 'POST', { agentId: agent.id, cwd: '/tmp/alpha' });
+    assert.deepEqual((await recent())[host], ['/tmp/alpha', '/tmp/beta']);
+
+    // A different host keeps its own independent list.
+    await request('/sessions', 'POST', { agentId: other.id, cwd: '/srv/gamma' });
+    const split = await recent();
+    assert.deepEqual(split[host], ['/tmp/alpha', '/tmp/beta']);
+    assert.deepEqual(split[hostKey(other)], ['/srv/gamma']);
+
+    // Resuming from history (no explicit cwd) does not touch the recent list.
+    const resumed = await (await request('/sessions', 'POST', { agentId: agent.id, historyId: historicalId })).json();
+    assert.equal(resumed.cwd, '/from-history');
+    assert.deepEqual((await recent())[host], ['/tmp/alpha', '/tmp/beta']);
+
+    // The per-host list is capped at 20 with the oldest entries evicted.
+    for (let i = 0; i < 25; i++) await request('/sessions', 'POST', { agentId: agent.id, cwd: `/tmp/dir-${i}` });
+    const list = (await recent())[host];
+    assert.equal(list.length, 20);
+    assert.equal(list[0], '/tmp/dir-24');
+    assert.equal(list[19], '/tmp/dir-5');
+    assert.equal(list.includes('/tmp/dir-4'), false);
+    assert.equal(list.includes('/tmp/alpha'), false);
+
+    // The cap and contents survive a reload from disk.
+    assert.deepEqual((await new ConfigStore(directory).load()).get().recentCwds, await recent());
+  } finally { for (const session of sessions.list()) sessions.get(session.id)?.dispose(); await app.close(); await rm(directory, { recursive: true, force: true }); }
 });

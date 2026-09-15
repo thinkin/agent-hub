@@ -51,10 +51,14 @@ export const workspaceSchema = z.object({
 export type Workspace = z.infer<typeof workspaceSchema>;
 export type WorkspaceTab = z.infer<typeof tabSchema>;
 const emptyWorkspace = () => ({ tabs: [], activeTabId: null });
-const currentConfigSchema = z.object({ version: z.literal(3), historyLimit: z.number().int().min(1).max(100), agents: z.array(agentSchema), workspace: workspaceSchema.default(emptyWorkspace) });
+export const MAX_RECENT_CWDS = 20;
+// Recent working directories only make sense on the host they were used on, so key them by connection:target.
+export function hostKey(agent: { connection: string; target: string }) { return `${agent.connection}:${agent.target}`; }
+const currentConfigSchema = z.object({ version: z.literal(3), historyLimit: z.number().int().min(1).max(100), agents: z.array(agentSchema), workspace: workspaceSchema.default(emptyWorkspace), recentCwds: z.record(z.array(text).max(MAX_RECENT_CWDS)).default({}) });
 export const configSchema = z.preprocess(value => {
   if (!value || typeof value !== 'object') return value;
   const raw = structuredClone(value) as any;
+  if (Array.isArray(raw.recentCwds)) delete raw.recentCwds; // legacy flat list had no host context; drop it and default to {}
   const types = new Map((raw.agents ?? []).map((agent: any) => [agent.id, agent.type ?? 'claude-code']));
   if (raw.version === 1 || raw.version === 2) {
     // v1/v2 kept per-agent tab groups: { selectedAgentId, agents: { <id>: { tabs, activeTabId } } }.
@@ -85,7 +89,7 @@ export const workingDirectory = text;
 const execFileAsync = promisify(execFile);
 
 export class ConfigStore {
-  private state: Config = { version: 3, historyLimit: 30, agents: [], workspace: { tabs: [], activeTabId: null } };
+  private state: Config = { version: 3, historyLimit: 30, agents: [], workspace: { tabs: [], activeTabId: null }, recentCwds: {} };
   private queue: Promise<unknown> = Promise.resolve();
   constructor(readonly directory = join(homedir(), '.agent-hub')) {}
   async load() {

@@ -4,7 +4,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { z, ZodError } from 'zod';
-import { ConfigStore, agentInput, batchInput, discoverInput, initScriptKey, workingDirectory } from './config.js';
+import { ConfigStore, agentInput, batchInput, discoverInput, initScriptKey, workingDirectory, MAX_RECENT_CWDS, hostKey } from './config.js';
 import { AgentRegistry } from './agents/registry.js';
 import type { AgentAdapter } from './agents/types.js';
 import { Sessions } from './sessions.js';
@@ -145,6 +145,7 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
       cwd = workingDirectory.parse(item.cwd); agentSessionId = item.id;
     }
     const session = await sessions.create(agent, cwd, agentSessionId, input.picker);
+    if (input.cwd) await store.update(c => { const key = hostKey(agent); c.recentCwds[key] = [input.cwd!, ...(c.recentCwds[key] ?? []).filter(x => x !== input.cwd)].slice(0, MAX_RECENT_CWDS); });
     res.status(201).json(session.info);
   });
   app.delete('/api/sessions/:id', (req, res) => {

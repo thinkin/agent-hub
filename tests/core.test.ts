@@ -26,7 +26,7 @@ test('configuration is atomic, private, metadata-only and serializes concurrent 
     assert.equal(reloaded.get().historyLimit, 50);
     assert.equal((await stat(join(directory, 'config.json'))).mode & 0o777, 0o600);
     assert.equal((await stat(directory)).mode & 0o777, 0o700);
-    assert.deepEqual(Object.keys(JSON.parse(await readFile(join(directory, 'config.json'), 'utf8'))).sort(), ['agents', 'historyLimit', 'version', 'workspace']);
+    assert.deepEqual(Object.keys(JSON.parse(await readFile(join(directory, 'config.json'), 'utf8'))).sort(), ['agents', 'historyLimit', 'recentCwds', 'version', 'workspace']);
     await assert.rejects(store.update(c => { c.historyLimit = -1; }));
     await store.update(c => { c.historyLimit = 10; });
     assert.equal(store.get().historyLimit, 10);
