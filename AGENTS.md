@@ -52,7 +52,6 @@
 - 配置目录按类型映射：Claude Code 使用 `CLAUDE_CONFIG_DIR`，Codex 使用 `CODEX_HOME`，TraeX 使用 `TRAECLI_HOME`。
 - Claude 历史来自项目 JSONL；Codex 与 TraeX 历史来自各自 `state_5.sqlite` 的 `threads` 表，查询必须只读、分页且限制返回量。
 - Web PTY 必须移除 `NO_COLOR` / `FORCE_COLOR`，声明 `TERM=xterm-256color`、`COLORTERM=truecolor`、`TERM_PROGRAM=AgentHub`；xterm 主题必须提供完整 ANSI 16 色。
-- Codex 与 TraeX 的 UI 图标由 `scripts/prepare-agent-icons.py` 从产品提供的 28px WebP 去除烘焙背景后生成透明 PNG；不使用手绘近似图标或依赖开发机应用资源。
 - 初始化脚本指纹参与环境匹配和缓存隔离；脚本明文只保存在 Agent 配置，不复制到 tabs，不在日志或错误中额外输出脚本。
 - 不记录 token、Cookie、SSH 密钥、对话正文；测试使用临时目录和合成数据。
 - 不创建无关文档或冗长注释；在改动影响操作方式时同步 README。
