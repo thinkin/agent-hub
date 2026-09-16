@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { api, mergeConversations, sameEnvironment, tabSession, hostKey, type Agent, type AgentType, type Config, type Conversation, type DiscoverResult, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { api, mergeConversations, sameEnvironment, tabSession, hostKey, type Agent, type AgentType, type Config, type Conversation, type DirectoryListing, type DiscoverResult, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
 import { applyTheme, storedTheme, type ThemeName } from './theme';
 const Terminal = lazy(() => import('./Terminal'));
 const emptyAgent = { name: '', type: 'claude-code' as const, connection: 'ssh' as const, target: '', cwd: '~', executable: 'claude', configDir: '', initScript: '' };
@@ -18,6 +18,16 @@ function agentBand(agentId: string) {
   let hash = 0;
   for (let i = 0; i < agentId.length; i++) hash = (hash * 31 + agentId.charCodeAt(i)) >>> 0;
   return bandPalette[hash % bandPalette.length];
+}
+function splitDirectoryQuery(value: string) {
+  const raw = value.trim() || '~';
+  if (raw === '~') return { base: '~', term: '', searching: false };
+  const trimmed = raw.replace(/\/+$/, '') || raw;
+  if (raw.endsWith('/')) return { base: trimmed === '~' ? '~' : trimmed, term: '', searching: trimmed !== '~' };
+  const index = raw.lastIndexOf('/');
+  if (index <= 0) return { base: '~', term: raw.startsWith('~') ? raw.slice(1) : raw, searching: true };
+  const base = raw.slice(0, index) || '~';
+  return { base, term: raw.slice(index + 1), searching: true };
 }
 function AgentIcon({ type, size = 18, labelled = true }: { type: Agent['type']; size?: number; labelled?: boolean }) {
   if (type === 'claude-code') return <span className="agent-icon claude-icon" title={labelled ? 'Claude Code' : undefined} aria-hidden={labelled ? undefined : true}><svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.25v19.5M2.25 12h19.5M5.1 5.1l13.8 13.8M18.9 5.1 5.1 18.9M8.27 2.98l7.46 18.04M21.02 8.27 2.98 15.73M15.73 2.98 8.27 21.02M2.98 8.27l18.04 7.46" /></svg>{labelled && <span className="sr-only">Claude Code</span>}</span>;
@@ -63,34 +73,65 @@ function AgentSwitcher({ agents, selected, disabled, onSelect }: { agents: Agent
   </div>;
 }
 
-function DirectoryInput({ value, onChange, suggestions, pristine, required }: { value: string; onChange(value: string): void; suggestions: string[]; pristine?: string; required?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const [focused, setFocused] = useState(-1);
-  const root = useRef<HTMLDivElement>(null);
-  const query = value.trim().toLocaleLowerCase();
-  // Show the full host history until the user edits away from the prefilled value; once they type, narrow by substring.
-  const untouched = !query || query === (pristine ?? '').trim().toLocaleLowerCase();
-  const filtered = untouched ? suggestions : suggestions.filter(item => item.toLocaleLowerCase().includes(query));
-  const showable = !untouched && filtered.length === 1 && filtered[0].toLocaleLowerCase() === query ? [] : filtered;
+function DirectoryBrowser({ agent, value, recent, onChange }: { agent: Agent; value: string; recent: string[]; onChange(value: string): void }) {
+  const [browsing, setBrowsing] = useState(false);
+  const [listings, setListings] = useState<Record<string, DirectoryListing>>({});
+  const [expanded, setExpanded] = useState(() => new Set<string>());
+  const [loading, setLoading] = useState(() => new Set<string>());
+  const [error, setError] = useState('');
+  const query = splitDirectoryQuery(value);
+  const filter = query.term.trim().toLocaleLowerCase();
+  const load = useCallback(async (path: string, expand = true) => {
+    setLoading(previous => new Set(previous).add(path)); setError('');
+    try {
+      const listing = await api<DirectoryListing>(`/agents/${agent.id}/directories?path=${encodeURIComponent(path)}`);
+      setListings(previous => ({ ...previous, [path]: listing }));
+      if (expand) setExpanded(previous => new Set(previous).add(path));
+    } catch (error) { setError(errorText(error)); }
+    finally { setLoading(previous => { const next = new Set(previous); next.delete(path); return next; }); }
+  }, [agent.id]);
+  useEffect(() => { setBrowsing(false); setListings({}); setExpanded(new Set()); setError(''); }, [agent.id]);
+  const browse = () => { setBrowsing(true); if (!listings['~'] && !loading.has('~')) void load('~'); };
   useEffect(() => {
-    if (!open) return;
-    const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
-    document.addEventListener('pointerdown', close);
-    return () => document.removeEventListener('pointerdown', close);
-  }, [open]);
-  const choose = (item: string) => { onChange(item); setOpen(false); setFocused(-1); };
-  const keyDown = (event: React.KeyboardEvent) => {
-    if (event.key === 'Escape') { if (open) { event.stopPropagation(); setOpen(false); } return; }
-    if (!showable.length) return;
-    if (event.key === 'ArrowDown') { event.preventDefault(); setOpen(true); setFocused(value => (value + 1) % showable.length); }
-    else if (event.key === 'ArrowUp') { event.preventDefault(); setOpen(true); setFocused(value => (value <= 0 ? showable.length : value) - 1); }
-    else if (event.key === 'Enter' && open && focused >= 0 && showable[focused]) { event.preventDefault(); choose(showable[focused]); }
+    if (!browsing || listings[query.base] || loading.has(query.base)) return;
+    void load(query.base, query.base === '~');
+  }, [browsing, listings, loading, load, query.base]);
+  const toggle = (path: string) => {
+    if (path === '~') return;
+    if (expanded.has(path)) { setExpanded(previous => { const next = new Set(previous); next.delete(path); return next; }); return; }
+    if (listings[path]) setExpanded(previous => new Set(previous).add(path));
+    else void load(path);
   };
-  return <div className="cwd-field" ref={root}>
-    <input role="combobox" required={required} value={value} spellCheck={false} autoComplete="off" aria-expanded={open && showable.length > 0} aria-controls="cwd-options" aria-autocomplete="list" aria-activedescendant={open && showable[focused] ? `cwd-option-${focused}` : undefined}
-      onChange={event => { onChange(event.target.value); setOpen(true); setFocused(-1); }} onFocus={() => setOpen(true)} onKeyDown={keyDown} />
-    {open && showable.length > 0 && <div className="cwd-menu" id="cwd-options" role="listbox" aria-label="历史工作目录">{showable.map((item, index) =>
-      <button type="button" id={`cwd-option-${index}`} role="option" aria-selected={index === focused} className={`cwd-option ${index === focused ? 'focused' : ''}`} key={item} onMouseEnter={() => setFocused(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(item)}>{item}</button>)}</div>}
+  const rows: { path: string; name: string; depth: number; hasChildren: boolean }[] = [{ path: '~', name: '~', depth: 0, hasChildren: true }];
+  const append = (parent: string, depth: number) => {
+    if (parent !== '~' && !expanded.has(parent)) return;
+    for (const entry of listings[parent]?.entries ?? []) { rows.push({ ...entry, depth }); append(entry.path, depth + 1); }
+  };
+  append('~', 1);
+  const source = listings[query.base]?.entries ?? [];
+  const exact = query.searching && filter ? source.find(entry => entry.name.toLocaleLowerCase() === filter || entry.path === value.trim()) : undefined;
+  const browseBase = exact?.path ?? query.base;
+  useEffect(() => {
+    if (!browsing || !exact || listings[exact.path] || loading.has(exact.path)) return;
+    void load(exact.path, false);
+  }, [browsing, exact, listings, loading, load]);
+  const filtered = source.filter(entry => !filter || entry.name.toLocaleLowerCase().includes(filter));
+  const visibleRows = query.searching && !exact ? filtered.map(entry => ({ ...entry, name: entry.path, depth: 0 })) : exact ? (listings[browseBase]?.entries ?? []).map(entry => ({ ...entry, depth: 0 })) : rows;
+  const busyPath = exact ? browseBase : query.base;
+  return <div className="directory-browser" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setBrowsing(false); }} onKeyDown={event => { if (event.key === 'Escape' && browsing) { event.stopPropagation(); setBrowsing(false); } }}>
+    <input required value={value} spellCheck={false} autoComplete="off" aria-label="工作目录" aria-controls="directory-source" aria-expanded={browsing} onChange={event => onChange(event.target.value)} onFocus={browse} onKeyDown={event => { if (event.key === 'Escape') { setBrowsing(false); event.currentTarget.blur(); } }} />
+    {!browsing ? <div className="recent-directories" id="directory-source" aria-label="最近工作目录">
+      <div className="directory-source-heading">最近使用</div>
+      {recent.length > 0 ? recent.slice(0, 5).map(path => <button type="button" className={path === value ? 'selected' : ''} title={path} key={path} onClick={() => onChange(path)}><code>{path}</code></button>) : <p>暂无最近使用的目录</p>}
+    </div> : <div className="directory-tree" id="directory-source" role="tree" aria-label={`${agent.connection === 'local' ? '本机' : agent.target}目录`} aria-busy={loading.size > 0}>
+      {visibleRows.map(row => { const open = row.path === '~' || expanded.has(row.path), pending = loading.has(row.path); return <div className={`directory-row ${row.path === value ? 'selected' : ''}`} role="treeitem" aria-level={row.depth + 1} aria-expanded={!query.searching && row.hasChildren ? open : undefined} aria-selected={row.path === value} style={{ paddingLeft: `${8 + row.depth * 18}px` }} key={row.path}>
+        <button type="button" className="directory-name" title={row.path} onClick={() => { onChange(row.path); if (row.hasChildren && !open && !pending) toggle(row.path); }}>{pending ? `${row.name}...` : row.name}</button>
+      </div>; })}
+      {loading.has(busyPath) && <p className="directory-empty">读取目录...</p>}
+      {!loading.has(busyPath) && (exact ? listings[browseBase] : listings[query.base]) && visibleRows.length === 0 && <p className="directory-empty">没有匹配的目录</p>}
+    </div>}
+    {Object.values(listings).some(listing => listing.truncated) && <p className="directory-note">包含子目录过多，仅显示前 200 项</p>}
+    {error && <p className="directory-error" role="alert">{error}</p>}
   </div>;
 }
 
@@ -235,7 +276,7 @@ function ConversationLauncher({ agents, agent, onAgentChange, sessions, titles, 
     <section className="new-conversation" aria-labelledby="new-conversation-heading">
       <div className="launcher-heading"><div><h3 id="new-conversation-heading">新建对话</h3><p>在 {agent.name} 启动新的 {agentTypes[agent.type].label}</p></div></div>
       <form onSubmit={event => { event.preventDefault(); void start(); }}>
-        <label>工作目录<DirectoryInput value={cwd} onChange={setCwd} suggestions={recentCwds[hostKey(agent)] ?? []} pristine={agent.cwd} required /></label>
+        <label>工作目录<DirectoryBrowser agent={agent} value={cwd} onChange={setCwd} recent={recentCwds[hostKey(agent)] ?? []} /></label>
         <button type="submit" className="primary" disabled={busy}>{busy ? '正在连接…' : `启动 ${agentTypes[agent.type].label}`}</button>
       </form>
     </section>
@@ -272,6 +313,7 @@ export default function App() {
   const [launcherAgentId, setLauncherAgentId] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeName>(storedTheme);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const tabsViewport = useRef<HTMLDivElement>(null);
   const launching = useRef(false);
   const activatedTabs = useRef(new Set<string>());
   const tabs = workspace.tabs;
@@ -294,11 +336,20 @@ export default function App() {
   // fall back to the id its live session has backfilled so titles resolve before it is persisted.
   const resolvedSessionId = (tab: WorkspaceTab) => { const a = agentOf(tab); return tab.agentSessionId ?? (a ? tabSession(tab, a, sessions)?.agentSessionId : undefined); };
   const titleFor = (tab: WorkspaceTab) => { const id = resolvedSessionId(tab); return titles[tab.agentId]?.find(item => item.id === id)?.title || '新对话'; };
+  const activeTitle = active ? titleFor(active) : '';
   useEffect(() => { applyTheme(theme); }, [theme]);
-  useEffect(() => {
-    const tab = active && document.getElementById(`tab-${active.id}`)?.parentElement;
-    if (tab) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [active?.id]);
+  useLayoutEffect(() => {
+    const viewport = tabsViewport.current, tab = active && document.getElementById(`tab-${active.id}`)?.parentElement;
+    if (!viewport || !tab) return;
+    const reveal = () => {
+      const left = tab.offsetLeft, right = left + tab.offsetWidth;
+      if (left < viewport.scrollLeft) viewport.scrollLeft = left;
+      else if (right > viewport.scrollLeft + viewport.clientWidth) viewport.scrollLeft = right - viewport.clientWidth;
+    };
+    reveal();
+    const observer = new ResizeObserver(reveal); observer.observe(viewport); observer.observe(tab);
+    return () => observer.disconnect();
+  }, [active?.id, activeTitle]);
   const loadSessions = useCallback(async () => { const data = await api<Session[]>('/sessions'); setSessions(data); return data; }, []);
   const changeWorkspace = useCallback((change: object) => {
     const task = queue.current.then(async () => { const next = await api<Workspace>('/workspace', 'PATCH', change); setWorkspace(next); });
@@ -418,7 +469,7 @@ export default function App() {
       </div>
     </header>
     <div className="tabbar">
-      <div className="tabs" role="tablist" aria-label="打开的对话">{groups.map(group => (
+      <div className="tabs" ref={tabsViewport} role="tablist" aria-label="打开的对话">{groups.map(group => (
         <div className="tab-group" role="group" style={{ ['--agent-band' as string]: agentBand(group.agentId) }} aria-label={group.agent ? group.agent.name : '已移除的 Agent'} title={group.agent ? `${group.agent.name} · ${group.agent.connection === 'local' ? '本机' : group.agent.target}` : '已移除的 Agent'} key={group.agentId}>{group.tabs.map(tab => {
           const session = group.agent && tabSession(tab, group.agent, sessions), selected = active?.id === tab.id;
           const status = session?.status === 'running' ? '活跃' : session ? '已退出' : '待恢复';

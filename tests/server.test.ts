@@ -108,6 +108,10 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
     close() {},
   };
   const discoverRun = async (probe: { target: string }, command: string) => {
+    if (!command.includes("command -v")) {
+      if (command.endsWith("'~/outside'")) throw new Error('只能浏览主目录下的文件夹');
+      return '__AGENT_HUB_DIRS__' + JSON.stringify({ path: '~', entries: [{ name: 'projects', path: '~/projects', hasChildren: true }, { name: '.config', path: '~/.config', hasChildren: false }], truncated: false });
+    }
     assert.match(command, /command -v 'claude'/);
     return probe.target === 'scan-host' ? '__AGENT_HUB_HOST__ scanbox\n__AGENT_HUB_PYTHON__\n__AGENT_HUB_FOUND__ claude-code /opt/claude\n' : '__AGENT_HUB_HOST__ barebox\n';
   };
@@ -135,6 +139,11 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
     assert.equal((await batch.json()).agents.length, 1);
     assert.equal(store.get().agents.length, before + 1);
     assert.equal((await request('/agents/batch', 'POST', { agents: [] })).status, 400);
+    const directories = await (await request(`/agents/${agent.id}/directories?path=~`)).json();
+    assert.equal(directories.path, '~');
+    assert.deepEqual(directories.entries.map((entry: { path: string }) => entry.path), ['~/projects', '~/.config']);
+    assert.equal((await request(`/agents/${agent.id}/directories?path=${encodeURIComponent('bad\npath')}`)).status, 400);
+    assert.equal((await request(`/agents/${agent.id}/directories?path=${encodeURIComponent('~/outside')}`)).status, 500);
     assert.equal((await request('/sessions', 'POST', { agentId: agent.id, cwd: 'bad\u0000path' })).status, 400);
     const response = await request('/sessions', 'POST', { agentId: agent.id });
     assert.equal(response.status, 201);

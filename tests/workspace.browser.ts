@@ -38,8 +38,15 @@ test('agent tabs persist across browsers and service restarts without eager proc
     return '__AGENT_HUB_JSON__' + JSON.stringify({ items: matching.slice(options.offset, options.offset + options.limit), total: matching.length, warnings: [] });
   });
   let sessions = createSessions();
-  const discoverRun = async (agent: { target: string }) => {
+  const discoverRun = async (agent: { target: string }, command: string) => {
     if (agent.target === 'scan-host') return '__AGENT_HUB_HOST__ scanbox\n__AGENT_HUB_PYTHON__\n__AGENT_HUB_FOUND__ claude-code /usr/bin/claude\n';
+    if (!command.includes('command -v')) {
+      const path = command.includes("'~/work'") ? '~/work' : '~';
+      const entries = path === '~'
+        ? [{ name: 'work', path: '~/work', hasChildren: true }, { name: '.config', path: '~/.config', hasChildren: false }]
+        : [{ name: 'src', path: '~/work/src', hasChildren: true }, { name: 'docs', path: '~/work/docs', hasChildren: false }];
+      return '__AGENT_HUB_DIRS__' + JSON.stringify({ path, entries, truncated: false });
+    }
     throw new Error('SSH connection refused (test)');
   };
   let app = await createApp({ store, sessions, registry: new AgentRegistry([createClaude()], discoverRun), dev: true });
@@ -83,10 +90,18 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await expect(page.getByRole('region', { name: '打开对话' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '新建对话' })).toBeVisible();
     await expect(page.getByRole('heading', { name: '打开历史对话' })).toBeVisible();
+    await expect(page.getByLabel('最近工作目录')).toBeVisible();
+    await expect(page.getByRole('tree', { name: 'dev-host目录' })).toHaveCount(0);
+    await page.getByRole('textbox', { name: '工作目录', exact: true }).fill('~/work');
+    await expect(page.getByRole('treeitem', { name: 'src' })).toBeVisible();
+    await expect(page.getByRole('treeitem', { name: 'docs' })).toBeVisible();
+    await page.getByRole('textbox', { name: '工作目录', exact: true }).fill('~/work/sr');
+    await expect(page.getByRole('treeitem', { name: '~/work/src' })).toBeVisible();
+    await expect(page.getByRole('treeitem', { name: '~/work/docs' })).toHaveCount(0);
     await expect(page.getByRole('tab')).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath('empty.png'), fullPage: true });
     await expect(page.locator('.tab-actions button')).toHaveCount(0);
-    await page.getByRole('button', { name: '启动 Claude Code', exact: true }).click();
+    await page.locator('.new-conversation form button.primary').click();
     await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     await expect(page.locator('.tab-actions button')).toHaveCount(1);
     await expect(page.getByRole('button', { name: '添加对话' })).toHaveText('+');
@@ -193,6 +208,10 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.setViewportSize({ width: 390, height: 720 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(page.getByRole('button', { name: '添加对话', exact: true })).toBeInViewport();
+    await page.getByRole('tab').last().evaluate((element: HTMLElement) => element.click());
+    await expect(page.getByRole('tab').last()).toHaveAttribute('aria-selected', 'true');
+    const activeTabBox = await activeTab().boundingBox(), tabbarBox = await page.locator('.tabs').boundingBox();
+    expect(activeTabBox && tabbarBox && activeTabBox.x >= tabbarBox.x && activeTabBox.x + activeTabBox.width <= tabbarBox.x + tabbarBox.width).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('narrow.png'), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 980 });
     await openPicker();

@@ -131,6 +131,11 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     const { offset, limit, refresh } = z.object({ offset: z.coerce.number().int().min(0).max(100000).default(0), limit: z.coerce.number().int().min(1).max(100).default(store.get().historyLimit), refresh: z.enum(['true', 'false']).default('false') }).parse(req.query);
     res.json(await registry.for(agent).history(agent, offset, limit, refresh === 'true'));
   });
+  app.get('/api/agents/:id/directories', async (req, res) => {
+    const agent = store.agent(req.params.id);
+    const { path } = z.object({ path: workingDirectory.default('~') }).parse(req.query);
+    res.json(await registry.directories(agent, path));
+  });
   app.get('/api/agents/:id/session-titles', async (req, res) => {
     const agent = store.agent(req.params.id);
     const tabs = store.get().workspace.tabs.filter(t => t.agentId === agent.id);

@@ -19,6 +19,8 @@ export function tabSession(tab: WorkspaceTab, agent: Agent, sessions: Session[])
 export interface Session { id: string; agentId: string; agentName: string; type: AgentType; connection: 'ssh' | 'local'; target: string; configDir: string; cwd: string; agentSessionId?: string; initScriptKey?: string; status: 'running' | 'exited'; created: number; exitCode?: number }
 export interface HistoryItem { id: string; title: string; cwd: string; modified: number; created?: number }
 export interface History { items: HistoryItem[]; total: number; warnings: string[] }
+export interface DirectoryEntry { name: string; path: string; hasChildren: boolean }
+export interface DirectoryListing { path: string; entries: DirectoryEntry[]; truncated: boolean }
 export interface Conversation { key: string; title: string; cwd: string; modified: number; session?: Session; history?: HistoryItem }
 export function mergeConversations(agent: Agent, sessions: Session[], history: HistoryItem[], titles: HistoryItem[]): Conversation[] {
   const metadata = new Map(history.map(item => [item.id, item]));

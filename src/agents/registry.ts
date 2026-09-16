@@ -7,6 +7,8 @@ import { TraexAdapter } from './traex.js';
 
 export interface DiscoveredAgent { type: Agent['type']; label: string; executable: string; version: string }
 export interface DiscoverResult { hostname: string; python: boolean; agents: DiscoveredAgent[]; warnings: string[] }
+export interface DirectoryEntry { name: string; path: string; hasChildren: boolean }
+export interface DirectoryListing { path: string; entries: DirectoryEntry[]; truncated: boolean }
 
 export class AgentRegistry {
   private adapters: Map<Agent['type'], AgentAdapter>;
@@ -43,6 +45,16 @@ export class AgentRegistry {
     if (!agents.length) warnings.push('未在该环境探测到 Claude Code、Codex 或 TraeX，可手动填写可执行文件路径。');
     if (agents.length && !python) warnings.push('未检测到 Python 3，历史读取将不可用；请在该环境安装 Python 3。');
     return { hostname, python, agents, warnings };
+  }
+  async directories(agent: Agent, path: string): Promise<DirectoryListing> {
+    const source = `import json,os,sys\nhome=os.path.abspath(os.path.expanduser("~"))\nrequested=os.path.abspath(os.path.expanduser(sys.argv[1]))\nif os.path.commonpath([home,requested]) != home: raise ValueError("只能浏览主目录下的文件夹")\nif not os.path.isdir(requested): raise ValueError("目录不存在或不可访问")\nitems=[]\nwith os.scandir(requested) as scan:\n for entry in scan:\n  try:\n   if not entry.is_dir(follow_symlinks=False): continue\n   child=os.path.abspath(entry.path)\n   has_children=any(item.is_dir(follow_symlinks=False) for item in os.scandir(child))\n   items.append({"name":entry.name,"path":"~"+(child[len(home):] if child != home else ""),"hasChildren":has_children})\n  except OSError: pass\nitems.sort(key=lambda item:(item["name"].startswith("."),item["name"].casefold()))\nprint("__AGENT_HUB_DIRS__"+json.dumps({"path":"~"+(requested[len(home):] if requested != home else ""),"entries":items[:200],"truncated":len(items)>200},ensure_ascii=False))`;
+    const encoded = Buffer.from(source).toString('base64');
+    const environment = agent.initScript.trim() ? `set -e\neval ${quote(agent.initScript)} </dev/null\n` : '';
+    const command = `${environment}python3 -c "import base64;exec(base64.b64decode('${encoded}'))" ${quote(path)}`;
+    const output = await this.run(agent, command, '');
+    const marker = output.lastIndexOf('__AGENT_HUB_DIRS__');
+    if (marker < 0) throw new Error('目录读取返回格式无效');
+    return JSON.parse(output.slice(marker + '__AGENT_HUB_DIRS__'.length).trim()) as DirectoryListing;
   }
   close() { for (const adapter of this.adapters.values()) adapter.close(); }
 }
