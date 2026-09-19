@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, mergeConversations, sameEnvironment, tabSession, hostKey, type Agent, type AgentType, type Config, type Conversation, type DirectoryListing, type DiscoverResult, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
 import { applyTheme, storedTheme, type ThemeName } from './theme';
+import WorkspaceTools from './WorkspaceTools';
 const Terminal = lazy(() => import('./Terminal'));
 const emptyAgent = { name: '', type: 'claude-code' as const, connection: 'ssh' as const, target: '', cwd: '~', executable: 'claude', configDir: '', initScript: '' };
 const agentTypes: Record<AgentType, { label: string; executable: string; suffix: string }> = {
@@ -312,6 +313,7 @@ export default function App() {
   const [dialog, setDialog] = useState<'open' | null>(null);
   const [launcherAgentId, setLauncherAgentId] = useState<string | null>(null);
   const [theme, setTheme] = useState<ThemeName>(storedTheme);
+  const [workspaceTool, setWorkspaceTool] = useState<'shell' | 'review' | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const tabsViewport = useRef<HTMLDivElement>(null);
   const launching = useRef(false);
@@ -337,6 +339,24 @@ export default function App() {
   const resolvedSessionId = (tab: WorkspaceTab) => { const a = agentOf(tab); return tab.agentSessionId ?? (a ? tabSession(tab, a, sessions)?.agentSessionId : undefined); };
   const titleFor = (tab: WorkspaceTab) => { const id = resolvedSessionId(tab); return titles[tab.agentId]?.find(item => item.id === id)?.title || '新对话'; };
   const activeTitle = active ? titleFor(active) : '';
+  const changedEnvironment = !!active && (!activeAgent || !sameEnvironment(active, activeAgent));
+  const previousActiveTab = useRef<string | null>(workspace.activeTabId);
+  useEffect(() => {
+    if (previousActiveTab.current !== workspace.activeTabId) setWorkspaceTool(null);
+    previousActiveTab.current = workspace.activeTabId;
+  }, [workspace.activeTabId]);
+  useEffect(() => {
+    if (!active || !activeAgent || changedEnvironment) return;
+    const shortcut = (event: KeyboardEvent) => {
+      if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey || event.repeat) return;
+      const tool = event.key.toLowerCase() === 't' ? 'shell' : event.key.toLowerCase() === 'g' ? 'review' : null;
+      if (!tool) return;
+      event.preventDefault(); event.stopPropagation();
+      setWorkspaceTool(current => current === tool ? null : tool);
+    };
+    window.addEventListener('keydown', shortcut, true);
+    return () => window.removeEventListener('keydown', shortcut, true);
+  }, [active?.id, activeAgent?.id, changedEnvironment]);
   useEffect(() => { applyTheme(theme); }, [theme]);
   useLayoutEffect(() => {
     const viewport = tabsViewport.current, tab = active && document.getElementById(`tab-${active.id}`)?.parentElement;
@@ -444,7 +464,6 @@ export default function App() {
     if (event.key === 'End') next = tabs.length - 1;
     if (next !== undefined) { event.preventDefault(); act(selectTab(tabs[next].id)); focusTab(tabs[next].id); }
   };
-  const changedEnvironment = !!active && (!activeAgent || !sameEnvironment(active, activeAgent));
   const openPicker = (agentId?: string) => { if (agentId) setLauncherAgentId(agentId); setDialog('open'); };
   return <div className="workspace">
     <a className="skip-link" href="#main">跳到终端区域</a>
@@ -475,7 +494,7 @@ export default function App() {
           const status = session?.status === 'running' ? '活跃' : session ? '已退出' : '待恢复';
           return <div className={`tab ${selected ? 'selected' : ''}`} key={tab.id}>
             <button role="tab" id={`tab-${tab.id}`} aria-selected={selected} aria-controls="terminal-panel" tabIndex={selected || (!active && tabs[0]?.id === tab.id) ? 0 : -1} onClick={() => act(selectTab(tab.id))} title={`${titleFor(tab)}\n${tab.cwd}\n${status}`} onKeyDown={event => moveFocus(event, tab.id)}>{group.agent && <AgentIcon type={group.agent.type} size={14} labelled={false} />}<span className={`state-icon ${session?.status === 'running' ? 'running' : ''}`} title={status} aria-hidden="true" /><span className="tab-title">{titleFor(tab)}</span><span className="sr-only">{status}</span></button>
-            <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，远程会话继续运行" onClick={() => act(changeWorkspace({ action: 'close', tabId: tab.id }))}>×</button>
+            <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，Agent 会话继续运行，辅助终端将结束" onClick={() => act(changeWorkspace({ action: 'close', tabId: tab.id }))}>×</button>
           </div>;
         })}</div>
       ))}</div>
@@ -487,6 +506,7 @@ export default function App() {
       {active ? <section className="active-workspace" id="terminal-panel" role="tabpanel" aria-labelledby={`tab-${active.id}`}>
         {mountedTerminals.map(({ tab, session }) => <Suspense key={tab.id} fallback={tab.id === active.id ? <div className="loading">加载终端…</div> : null}><Terminal sessionId={session.id} theme={theme} active={tab.id === active.id} /></Suspense>)}
         {!activeSession && <div className="empty-workspace"><h2>{titleFor(active)}</h2><p className="subtle">{changedEnvironment ? 'Agent 环境已更改，无法在当前环境恢复此 tab。' : active.agentSessionId ? busy ? '正在恢复 Agent 对话…' : 'Agent 对话暂未运行，点击当前 tab 可重试。' : '历史选择器没有可靠的对话标识，请重新打开对话。'}</p></div>}
+        {!changedEnvironment && activeAgent && <WorkspaceTools tab={active} theme={theme} open={workspaceTool} onOpen={setWorkspaceTool} onClose={() => setWorkspaceTool(null)} />}
       </section> : launcherAgent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher agents={config.agents} agent={launcherAgent} onAgentChange={setLauncherAgentId} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} recentCwds={config.recentCwds} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
     </main>
     {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onRegister={() => { setManaging(false); setRegistering(true); }} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}

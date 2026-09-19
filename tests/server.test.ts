@@ -13,7 +13,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocket } from 'ws';
 import * as pty from 'node-pty';
 import { ConfigStore, agentInput, hostKey } from '../src/config.js';
-import { Sessions } from '../src/sessions.js';
+import { AuxiliaryShells, Sessions } from '../src/sessions.js';
 import { ClaudeAdapter } from '../src/agents/claude.js';
 import { AgentRegistry } from '../src/agents/registry.js';
 import type { AgentAdapter } from '../src/agents/types.js';
@@ -96,6 +96,8 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
   await store.update(c => c.agents.push(agent, codexAgent));
   let spawns = 0;
   const sessions = new Sessions((_agent, _command, cols, rows) => { spawns++; return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "PTY READY\\n"; while IFS= read -r line; do printf "REPLY:%s\\n" "$line"; done'], { cols, rows, name: 'xterm-256color' }); });
+  let shellSpawns = 0;
+  const auxiliaryShells = new AuxiliaryShells((_agent, _command, cols, rows) => { shellSpawns++; return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "SHELL READY\\n"; sleep 30'], { cols, rows, name: 'xterm-256color' }); });
   const historicalId = randomUUID();
   const claude = new ClaudeAdapter(async () => '__AGENT_HUB_JSON__' + JSON.stringify({ items: [{ id: historicalId, cwd: '/existing', title: 'Old chat', modified: 1000 }], total: 1, warnings: [] }));
   let resolveThread!: (id: string) => void;
@@ -115,7 +117,7 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
     assert.match(command, /command -v 'claude'/);
     return probe.target === 'scan-host' ? '__AGENT_HUB_HOST__ scanbox\n__AGENT_HUB_PYTHON__\n__AGENT_HUB_FOUND__ claude-code /opt/claude\n' : '__AGENT_HUB_HOST__ barebox\n';
   };
-  const app = await createApp({ store, sessions, registry: new AgentRegistry([claude, codex], discoverRun) });
+  const app = await createApp({ store, sessions, auxiliaryShells, registry: new AgentRegistry([claude, codex], discoverRun) });
   const origin = await app.listen(0);
   const sockets: WebSocket[] = [];
   try {
@@ -178,7 +180,10 @@ test('HTTP security and real PTY survives disconnect, snapshots and exclusive co
     await store.update(c => c.agents.push(stranger));
     assert.equal((await request('/workspace', 'PATCH', { action: 'open', agentId: stranger.id, sessionId: session.id })).status, 500);
     assert.equal((await request('/workspace', 'PATCH', { action: 'select', tabId: randomUUID() })).status, 500);
+    const shell = await (await request(`/workspace/${tabId}/shell`, 'POST')).json();
+    assert.equal(shellSpawns, 1); assert.equal(shell.cwd, agent.cwd); assert.ok(auxiliaryShells.get(tabId));
     await request('/workspace', 'PATCH', { action: 'close', tabId });
+    assert.equal(auxiliaryShells.get(tabId), undefined);
     assert.equal(sessions.get(session.id)?.info.status, 'running');
     assert.equal(store.get().workspace.activeTabId, null);
     function connect(takeover = false) { const ws = new WebSocket(`${origin.replace('http:', 'ws:')}/terminal/${session.id}?takeover=${takeover}`, { headers: { Cookie: cookie, Origin: origin } }); sockets.push(ws); return ws; }

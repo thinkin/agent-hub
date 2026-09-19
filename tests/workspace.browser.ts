@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import * as pty from 'node-pty';
 import { createApp } from '../src/server.js';
 import { ConfigStore } from '../src/config.js';
-import { Sessions } from '../src/sessions.js';
+import { AuxiliaryShells, Sessions } from '../src/sessions.js';
 import { ClaudeAdapter } from '../src/agents/claude.js';
 import { AgentRegistry } from '../src/agents/registry.js';
 
@@ -27,6 +27,11 @@ test('agent tabs persist across browsers and service restarts without eager proc
     if (id) records.set(id, { id, cwd: '/srv/project', title: '修复终端刷新问题', modified: 1789200002 });
     return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "CLAUDE TERMINAL TEST\\n"; while IFS= read -r line; do if [ "$line" = exit ]; then break; fi; if [ "$line" = scrollback ]; then i=1; while [ "$i" -le 200 ]; do printf "SCROLLBACK:%03d\\n" "$i"; i=$((i + 1)); done; else printf "REPLY:%s\\n" "$line"; fi; done'], { cols, rows, name: 'xterm-256color' });
   });
+  let shellSpawns = 0;
+  const createAuxiliaryShells = () => new AuxiliaryShells((_agent, _command, cols, rows) => {
+    shellSpawns++;
+    return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "AUXILIARY SHELL READY\n"; while IFS= read -r line; do printf "SHELL:%s\n" "$line"; done'], { cols, rows, name: 'xterm-256color' });
+  });
   const createClaude = () => new ClaudeAdapter(async (agent, command) => {
     if (agent.target === 'unreachable') throw new Error('SSH connection refused (test)');
     if (agent.initScript) expect(command).toContain('eval ');
@@ -38,8 +43,11 @@ test('agent tabs persist across browsers and service restarts without eager proc
     return '__AGENT_HUB_JSON__' + JSON.stringify({ items: matching.slice(options.offset, options.offset + options.limit), total: matching.length, warnings: [] });
   });
   let sessions = createSessions();
+  let auxiliaryShells = createAuxiliaryShells();
   const discoverRun = async (agent: { target: string }, command: string) => {
     if (agent.target === 'scan-host') return '__AGENT_HUB_HOST__ scanbox\n__AGENT_HUB_PYTHON__\n__AGENT_HUB_FOUND__ claude-code /usr/bin/claude\n';
+    if (command.includes('__AGENT_HUB_GIT_STATUS__')) return '__AGENT_HUB_GIT_STATUS__1\n M web/src/App.tsx\0?? web/src/WorkspaceTools.tsx\0';
+    if (command.includes('__AGENT_HUB_GIT_DIFF__')) return '__AGENT_HUB_GIT_DIFF__\ndiff --git a/web/src/App.tsx b/web/src/App.tsx\n--- a/web/src/App.tsx\n+++ b/web/src/App.tsx\n@@ -1 +1 @@\n-old\n+new\n';
     if (!command.includes('command -v')) {
       const path = command.includes("'~/work'") ? '~/work' : '~';
       const entries = path === '~'
@@ -49,7 +57,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     }
     throw new Error('SSH connection refused (test)');
   };
-  let app = await createApp({ store, sessions, registry: new AgentRegistry([createClaude()], discoverRun), dev: true });
+  let app = await createApp({ store, sessions, auxiliaryShells, registry: new AgentRegistry([createClaude()], discoverRun), runCommand: discoverRun, dev: true });
   let origin = await app.listen(0);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -112,6 +120,44 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await expect(activeTab()).toContainText('修复终端刷新问题');
     const firstSession = sessions.list()[0];
     const agentId = store.get().agents[0].id;
+    await page.getByRole('button', { name: '辅助终端' }).click();
+    const shellDrawer = page.getByRole('complementary', { name: '辅助终端' });
+    await expect(shellDrawer.locator('.terminal-panel')).toHaveAttribute('data-state', 'connected');
+    expect(shellSpawns).toBe(1);
+    const drawerBox = await shellDrawer.boundingBox();
+    expect(drawerBox && drawerBox.width / page.viewportSize()!.width).toBeGreaterThan(0.7);
+    await shellDrawer.locator('.xterm-helper-textarea').fill('pwd');
+    await shellDrawer.locator('.xterm-helper-textarea').press('Enter');
+    await expect(shellDrawer.locator('.xterm-screen')).toContainText('SHELL:pwd');
+    const closeBox = await shellDrawer.getByRole('button', { name: '收起工具抽屉' }).boundingBox();
+    const headerBox = await shellDrawer.locator('.tool-header').boundingBox();
+    expect(closeBox && headerBox && closeBox.x < headerBox.x + headerBox.width / 2).toBe(true);
+    await page.keyboard.press('Control+Shift+KeyG');
+    const reviewDrawer = page.getByRole('complementary', { name: '代码审查' });
+    await expect(reviewDrawer.getByRole('heading', { name: '未暂存' })).toBeVisible();
+    await expect(reviewDrawer.getByRole('heading', { name: '未跟踪' })).toBeVisible();
+    await expect(reviewDrawer.getByRole('button', { name: 'M web/src/App.tsx' })).toBeVisible();
+    await expect(reviewDrawer.locator('.diff-add')).toContainText('+new');
+    await reviewDrawer.getByRole('radio', { name: '树形' }).click();
+    await expect(reviewDrawer.getByRole('treeitem', { name: 'web' }).first()).toHaveAttribute('aria-expanded', 'true');
+    await page.screenshot({ path: testInfo.outputPath('workspace-tools-tree.png'), fullPage: true });
+    await reviewDrawer.getByRole('treeitem', { name: 'web' }).first().locator(':scope > button').click();
+    await expect(reviewDrawer.getByRole('treeitem', { name: 'web' }).first()).toHaveAttribute('aria-expanded', 'false');
+    await reviewDrawer.getByRole('radio', { name: '平铺' }).click();
+    await expect(reviewDrawer.getByRole('button', { name: 'M web/src/App.tsx' })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('workspace-tools.png'), fullPage: true });
+    await page.keyboard.press('Control+Shift+KeyG');
+    await expect(page.locator('.tool-drawer')).toHaveCount(0);
+    const shellToolButton = page.getByRole('button', { name: '辅助终端' });
+    await shellToolButton.hover();
+    await expect(shellToolButton).toHaveCSS('width', '40px');
+    await expect(shellToolButton).toHaveCSS('transform', 'matrix(1, 0, 0, 1, -2, 0)');
+    await page.screenshot({ path: testInfo.outputPath('workspace-tool-hover.png'), fullPage: true });
+    await page.keyboard.press('Control+Shift+KeyT');
+    await expect(page.getByRole('complementary', { name: '辅助终端' })).toBeVisible();
+    expect(shellSpawns).toBe(1);
+    await page.keyboard.press('Control+Shift+KeyT');
+    await expect(page.getByLabel('辅助终端')).toHaveAttribute('aria-pressed', 'false');
     await page.locator('.xterm-helper-textarea').fill('browser-input');
     await page.locator('.xterm-helper-textarea').press('Enter');
     await openPicker();
@@ -139,6 +185,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     expect(Math.abs(bottom.max - bottom.top)).toBeLessThan(2);
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).press('ArrowRight');
     await expect(activeTab()).toContainText('接入之前已有的对话');
+    await expect(page.locator('.tool-drawer')).toHaveCount(0);
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).click();
     const restoredBottom = await page.locator('.terminal-panel:not([hidden]) .xterm-viewport').evaluate(element => ({ top: element.scrollTop, max: element.scrollHeight - element.clientHeight }));
     expect(Math.abs(restoredBottom.max - restoredBottom.top)).toBeLessThan(2);
@@ -225,7 +272,8 @@ test('agent tabs persist across browsers and service restarts without eager proc
     records.delete(missingId);
     store = await new ConfigStore(directory).load();
     sessions = createSessions();
-    app = await createApp({ store, sessions, registry: new AgentRegistry([createClaude()], discoverRun), dev: true });
+    auxiliaryShells = createAuxiliaryShells();
+    app = await createApp({ store, sessions, auxiliaryShells, registry: new AgentRegistry([createClaude()], discoverRun), runCommand: discoverRun, dev: true });
     origin = await app.listen(0);
     const beforeResume = spawns;
     page = await freshContext.newPage();

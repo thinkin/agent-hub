@@ -21,6 +21,10 @@ export interface HistoryItem { id: string; title: string; cwd: string; modified:
 export interface History { items: HistoryItem[]; total: number; warnings: string[] }
 export interface DirectoryEntry { name: string; path: string; hasChildren: boolean }
 export interface DirectoryListing { path: string; entries: DirectoryEntry[]; truncated: boolean }
+export type GitChangeKind = 'staged' | 'unstaged' | 'untracked';
+export interface GitChange { path: string; originalPath?: string; status: string; kind: GitChangeKind }
+export interface GitStatus { repository: boolean; changes: GitChange[] }
+export interface GitDiff { path: string; kind: GitChangeKind; diff: string; truncated: boolean }
 export interface Conversation { key: string; title: string; cwd: string; modified: number; session?: Session; history?: HistoryItem }
 export function mergeConversations(agent: Agent, sessions: Session[], history: HistoryItem[], titles: HistoryItem[]): Conversation[] {
   const metadata = new Map(history.map(item => [item.id, item]));

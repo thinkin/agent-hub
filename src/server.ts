@@ -4,18 +4,22 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { z, ZodError } from 'zod';
-import { ConfigStore, agentInput, batchInput, discoverInput, initScriptKey, workingDirectory, MAX_RECENT_CWDS, hostKey } from './config.js';
+import { ConfigStore, agentInput, batchInput, discoverInput, initScriptKey, workingDirectory, MAX_RECENT_CWDS, hostKey, type Agent } from './config.js';
 import { AgentRegistry } from './agents/registry.js';
 import type { AgentAdapter } from './agents/types.js';
-import { Sessions } from './sessions.js';
+import { AuxiliaryShells, Sessions } from './sessions.js';
+import { gitDiff, gitStatus } from './git.js';
+import { runRemote } from './ssh.js';
 
 export function equalSecret(actual: string | undefined, expected: string) {
   return !!actual && Buffer.byteLength(actual) === Buffer.byteLength(expected) && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
 }
-export async function createApp(options: { store: ConfigStore; sessions?: Sessions; registry?: AgentRegistry; dev?: boolean }) {
+export async function createApp(options: { store: ConfigStore; sessions?: Sessions; auxiliaryShells?: AuxiliaryShells; registry?: AgentRegistry; runCommand?: (agent: Agent, command: string, input?: string, signal?: AbortSignal) => Promise<string>; dev?: boolean }) {
   const { store } = options;
   const registry = options.registry ?? new AgentRegistry();
   const sessions = options.sessions ?? new Sessions(undefined, registry);
+  const auxiliaryShells = options.auxiliaryShells ?? new AuxiliaryShells();
+  const runCommand = options.runCommand ?? runRemote;
   sessions.setRegistry(registry);
   sessions.setSessionIdListener((session, agentSessionId) => {
     const tab = store.get().workspace.tabs.find(tab => tab.sessionId === session.id);
@@ -94,6 +98,7 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
         if (workspace.activeTabId === input.tabId) workspace.activeTabId = workspace.tabs[Math.min(index, workspace.tabs.length - 1)]?.id ?? null;
       }
     });
+    if (input.action === 'close') auxiliaryShells.closeTab(input.tabId);
     res.json(result.workspace);
   });
   app.patch('/api/settings', async (req, res) => {
@@ -123,6 +128,7 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     store.agent(id);
     if (sessions.list().some(s => s.agentId === id && s.status === 'running')) { res.status(409).json({ error: '请先结束该 Agent 的运行会话' }); return; }
     await store.update(c => { c.agents = c.agents.filter(a => a.id !== id); c.workspace.tabs = c.workspace.tabs.filter(t => t.agentId !== id); if (c.workspace.activeTabId && !c.workspace.tabs.some(t => t.id === c.workspace.activeTabId)) c.workspace.activeTabId = c.workspace.tabs[0]?.id ?? null; });
+    auxiliaryShells.closeAgent(id);
     res.json({ ok: true });
   });
   app.post('/api/agents/probe', async (req, res) => { const agent = { ...agentInput.parse(req.body), id: randomUUID() }; res.json(await registry.for(agent).probe(agent)); });
@@ -167,6 +173,31 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     session.dispose();
     res.json({ ok: true });
   });
+  function workspaceContext(tabId: string) {
+    const tab = store.get().workspace.tabs.find(item => item.id === tabId);
+    if (!tab) throw new Error('工作区不存在');
+    const agent = store.agent(tab.agentId);
+    if (tab.type !== agent.type || tab.connection !== agent.connection || tab.target !== agent.target || tab.configDir !== agent.configDir || (tab.initScriptKey ?? initScriptKey({ ...agent, initScript: '' })) !== initScriptKey(agent)) throw new Error('Agent 环境已更改');
+    return { tab, agent };
+  }
+  app.post('/api/workspace/:tabId/shell', (req, res) => {
+    const { tab, agent } = workspaceContext(z.string().uuid().parse(req.params.tabId));
+    res.status(201).json(auxiliaryShells.create(tab.id, agent, tab.cwd).info);
+  });
+  app.delete('/api/workspace/:tabId/shell', (req, res) => {
+    const { tab } = workspaceContext(z.string().uuid().parse(req.params.tabId));
+    auxiliaryShells.closeTab(tab.id);
+    res.json({ ok: true });
+  });
+  app.get('/api/workspace/:tabId/git/status', async (req, res) => {
+    const { tab, agent } = workspaceContext(z.string().uuid().parse(req.params.tabId));
+    res.json(await gitStatus(agent, tab.cwd, runCommand));
+  });
+  app.get('/api/workspace/:tabId/git/diff', async (req, res) => {
+    const input = z.object({ path: z.string().min(1).max(4096), kind: z.enum(['staged', 'unstaged', 'untracked']) }).parse(req.query);
+    const { tab, agent } = workspaceContext(z.string().uuid().parse(req.params.tabId));
+    res.json(await gitDiff(agent, tab.cwd, input.path, input.kind, runCommand));
+  });
   app.use('/api', (_req, res) => { res.status(404).json({ error: '接口不存在' }); });
   let vite: { close(): Promise<void> } | undefined;
   if (options.dev) {
@@ -184,8 +215,8 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
   server.on('upgrade', (req, socket, head) => {
     if (req.headers.host !== new URL(origin).host || req.headers.origin !== origin || !authenticated(req.headers.cookie)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
     const url = new URL(req.url!, origin);
-    const match = /^\/terminal\/([a-f0-9-]+)$/.exec(url.pathname);
-    const session = match && sessions.get(match[1]);
+    const match = /^\/(terminal|shell)\/([a-f0-9-]+)$/.exec(url.pathname);
+    const session = match && (match[1] === 'terminal' ? sessions.get(match[2]) : auxiliaryShells.get(match[2]));
     if (!session || session.isDisposed()) { socket.write('HTTP/1.1 404 Not Found\r\n\r\n'); socket.destroy(); return; }
     wss.handleUpgrade(req, socket, head, ws => {
       ws.on('error', () => {});
@@ -225,7 +256,7 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
       return origin;
     },
     async close() {
-      clearInterval(heartbeat); registry.close(); sessions.close();
+      clearInterval(heartbeat); registry.close(); sessions.close(); auxiliaryShells.close();
       for (const ws of wss.clients) ws.terminate();
       wss.close(); await vite?.close();
       await new Promise<void>(resolve => { server.close(() => resolve()); server.closeAllConnections(); });

@@ -4,7 +4,7 @@ import serialization from '@xterm/addon-serialize';
 import { WebSocket } from 'ws';
 import type { IPty } from 'node-pty';
 import { initScriptKey, type Agent } from './config.js';
-import { spawnTerminal } from './ssh.js';
+import { quote, remotePath, spawnTerminal } from './ssh.js';
 import type { AgentRegistry } from './agents/registry.js';
 import type { LaunchPlan } from './agents/types.js';
 
@@ -168,4 +168,29 @@ export class Sessions {
     return task;
   }
   close() { for (const session of this.sessions.values()) session.dispose(); this.sessions.clear(); }
+}
+
+export class AuxiliaryShells {
+  private shells = new Map<string, Session>();
+  constructor(private factory: TerminalFactory = spawnTerminal) {}
+  get(tabId: string) {
+    const shell = this.shells.get(tabId);
+    if (shell?.isDisposed()) { this.shells.delete(tabId); return undefined; }
+    return shell;
+  }
+  create(tabId: string, agent: Agent, cwd: string) {
+    const existing = this.get(tabId);
+    if (existing) return existing;
+    const initScript = agent.initScript ?? '';
+    const initialize = initScript.trim() ? `set -e\neval ${quote(initScript)} </dev/null\n` : '';
+    const command = `${initialize}cd ${remotePath(cwd)}\nexec "\${SHELL:-/bin/bash}" -l`;
+    const shell = new Session(agent, cwd, { command }, this.factory);
+    this.shells.set(tabId, shell);
+    return shell;
+  }
+  closeTab(tabId: string) { this.shells.get(tabId)?.dispose(); this.shells.delete(tabId); }
+  closeAgent(agentId: string) {
+    for (const [tabId, shell] of this.shells) if (shell.info.agentId === agentId) this.closeTab(tabId);
+  }
+  close() { for (const shell of this.shells.values()) shell.dispose(); this.shells.clear(); }
 }

@@ -4,12 +4,14 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { themes, type ThemeName } from './theme';
 
-export default function Terminal({ sessionId, theme, active }: { sessionId: string; theme: ThemeName; active: boolean }) {
+export default function Terminal({ sessionId, theme, active, endpoint = 'terminal', label = 'Agent 终端', processLabel = 'Agent 进程', onExit }: { sessionId: string; theme: ThemeName; active: boolean; endpoint?: 'terminal' | 'shell'; label?: string; processLabel?: string; onExit?(): void }) {
   const host = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerminal | null>(null);
   const activeRef = useRef(active);
   const resizeRef = useRef<(() => void) | null>(null);
+  const onExitRef = useRef(onExit);
   activeRef.current = active;
+  onExitRef.current = onExit;
   const [state, setState] = useState('连接终端…');
   const [attempt, setAttempt] = useState(0);
   const takeover = useRef(false);
@@ -32,7 +34,7 @@ export default function Terminal({ sessionId, theme, active }: { sessionId: stri
     resizeRef.current = resize;
     const connect = () => {
       ready = false; setState('连接终端…');
-      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/terminal/${sessionId}?takeover=${takeover.current}`);
+      ws = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/${endpoint}/${sessionId}?takeover=${takeover.current}`);
       takeover.current = false;
       ws.onmessage = event => {
         if (disposed) return;
@@ -43,10 +45,11 @@ export default function Terminal({ sessionId, theme, active }: { sessionId: stri
             if (disposed) return;
             ready = true; resize(); terminal.scrollToBottom();
             if (activeRef.current) terminal.focus();
-            setState(message.status === 'exited' ? 'Agent 进程已退出' : '已连接');
+            setState(message.status === 'exited' ? `${processLabel}已退出` : '已连接');
+            if (message.status === 'exited') onExitRef.current?.();
           });
         } else if (message.type === 'output') terminal.write(message.data);
-        else if (message.type === 'status') setState(`Agent 进程已退出 (${message.exitCode ?? '—'})`);
+        else if (message.type === 'status') { setState(`${processLabel}已退出 (${message.exitCode ?? '—'})`); onExitRef.current?.(); }
       };
       ws.onclose = event => {
         ready = false;
@@ -72,7 +75,7 @@ export default function Terminal({ sessionId, theme, active }: { sessionId: stri
       else if (ws.readyState === WebSocket.OPEN) ws.close();
       terminal.dispose();
     };
-  }, [sessionId, attempt]);
+  }, [sessionId, endpoint, processLabel, attempt]);
   useEffect(() => {
     if (!active) return;
     const frame = requestAnimationFrame(() => { resizeRef.current?.(); terminalRef.current?.focus(); });
@@ -83,6 +86,6 @@ export default function Terminal({ sessionId, theme, active }: { sessionId: stri
     {state !== '已连接' && <div className="terminal-status"><span className="muted-dot" />{state}
       {state === '此终端由其他页面控制' && <button onClick={() => { takeover.current = true; setAttempt(x => x + 1); }}>接管终端</button>}
     </div>}
-    <div className="terminal-host" ref={host} aria-label="Agent 终端" />
+    <div className="terminal-host" ref={host} aria-label={label} />
   </div>;
 }

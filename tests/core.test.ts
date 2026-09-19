@@ -12,7 +12,9 @@ import { ClaudeAdapter } from '../src/agents/claude.js';
 import { CodexAdapter } from '../src/agents/codex.js';
 import { TraexAdapter } from '../src/agents/traex.js';
 import { equalSecret } from '../src/server.js';
+import { gitDiff, gitStatus, validGitPath } from '../src/git.js';
 import { mergeConversations, tabSession, type Session } from '../web/src/api.js';
+import { buildChangeTree } from '../web/src/WorkspaceTools.js';
 
 const agent = { ...agentInput.parse({ name: 'Development', target: 'dev-host', cwd: '~/project' }), id: randomUUID() };
 
@@ -126,6 +128,31 @@ test('shell quoting prevents command expansion and preserves paths', () => {
   assert.throws(() => agentInput.parse({ name: 'x', target: '-oProxyCommand=evil' }));
   assert.throws(() => agentInput.parse({ name: 'x', target: 'dev\nhost' }));
   assert.equal(equalSecret('é'.repeat(64), 'a'.repeat(64)), false);
+});
+
+test('Git review parses staged, unstaged and untracked changes and validates paths', async () => {
+  const localAgent = { ...agentInput.parse({ name: 'Git agent', connection: 'local', target: 'local', cwd: '/work' }), id: randomUUID() };
+  let statusCommand = '';
+  const status = await gitStatus(localAgent, '/work', async (_agent, command) => {
+    statusCommand = command;
+    return '__AGENT_HUB_GIT_STATUS__1\nM  staged.ts\0 M unstaged.ts\0MM both.ts\0?? new.ts\0R  renamed.ts\0old.ts\0';
+  });
+  assert.match(statusCommand, /git status --porcelain=v1 -z/);
+  assert.deepEqual(status.changes.map(change => [change.kind, change.status, change.path, change.originalPath]), [
+    ['staged', 'M', 'staged.ts', undefined], ['unstaged', 'M', 'unstaged.ts', undefined],
+    ['staged', 'M', 'both.ts', undefined], ['unstaged', 'M', 'both.ts', undefined],
+    ['untracked', '?', 'new.ts', undefined], ['staged', 'R', 'renamed.ts', 'old.ts'],
+  ]);
+  assert.deepEqual(await gitStatus(localAgent, '/work', async () => '__AGENT_HUB_GIT_STATUS__0\n'), { repository: false, changes: [] });
+  let diffCommand = '';
+  const diff = await gitDiff(localAgent, '/work', 'src/file name.ts', 'staged', async (_agent, command) => { diffCommand = command; return '__AGENT_HUB_GIT_DIFF__\n+line\n'; });
+  assert.match(diffCommand, /git diff --cached/); assert.match(diffCommand, /'src\/file name.ts'/); assert.equal(diff.diff, '+line\n');
+  assert.equal(validGitPath('src/ok.ts'), true); assert.equal(validGitPath('../secret'), false); assert.equal(validGitPath('/etc/passwd'), false); assert.equal(validGitPath('bad\npath'), false);
+  await assert.rejects(gitDiff(localAgent, '/work', '../secret', 'unstaged'), /路径无效/);
+  const tree = buildChangeTree(status.changes.filter(change => change.kind === 'unstaged'));
+  assert.deepEqual(tree.map(node => node.name), ['both.ts', 'unstaged.ts']);
+  const nested = buildChangeTree([{ kind: 'unstaged', status: 'M', path: 'web/src/App.tsx' }, { kind: 'unstaged', status: 'M', path: 'web/test.ts' }]);
+  assert.equal(nested[0].name, 'web'); assert.deepEqual(nested[0].children.map(node => node.name), ['src', 'test.ts']); assert.equal(nested[0].children[0].children[0].change?.path, 'web/src/App.tsx');
 });
 
 test('agent adapters encapsulate native launch and resume commands', async () => {
