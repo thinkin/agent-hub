@@ -28,6 +28,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "CLAUDE TERMINAL TEST\\n"; while IFS= read -r line; do if [ "$line" = exit ]; then break; fi; if [ "$line" = scrollback ]; then i=1; while [ "$i" -le 200 ]; do printf "SCROLLBACK:%03d\\n" "$i"; i=$((i + 1)); done; else printf "REPLY:%s\\n" "$line"; fi; done'], { cols, rows, name: 'xterm-256color' });
   });
   let shellSpawns = 0;
+  let gitStatusReads = 0, gitDiffReads = 0;
   const createAuxiliaryShells = () => new AuxiliaryShells((_agent, _command, cols, rows) => {
     shellSpawns++;
     return pty.spawn('/bin/bash', ['--noprofile', '--norc', '-c', 'printf "AUXILIARY SHELL READY\n"; while IFS= read -r line; do printf "SHELL:%s\n" "$line"; done'], { cols, rows, name: 'xterm-256color' });
@@ -46,8 +47,8 @@ test('agent tabs persist across browsers and service restarts without eager proc
   let auxiliaryShells = createAuxiliaryShells();
   const discoverRun = async (agent: { target: string }, command: string) => {
     if (agent.target === 'scan-host') return '__AGENT_HUB_HOST__ scanbox\n__AGENT_HUB_PYTHON__\n__AGENT_HUB_FOUND__ claude-code /usr/bin/claude\n';
-    if (command.includes('__AGENT_HUB_GIT_STATUS__')) return '__AGENT_HUB_GIT_STATUS__1\n M web/src/App.tsx\0?? web/src/WorkspaceTools.tsx\0';
-    if (command.includes('__AGENT_HUB_GIT_DIFF__')) return '__AGENT_HUB_GIT_DIFF__\ndiff --git a/web/src/App.tsx b/web/src/App.tsx\n--- a/web/src/App.tsx\n+++ b/web/src/App.tsx\n@@ -1 +1 @@\n-old\n+new\n';
+    if (command.includes('__AGENT_HUB_GIT_STATUS__')) { gitStatusReads++; return '__AGENT_HUB_GIT_STATUS__1\n M web/src/App.tsx\0?? web/src/WorkspaceTools.tsx\0'; }
+    if (command.includes('__AGENT_HUB_GIT_DIFF__')) { gitDiffReads++; return '__AGENT_HUB_GIT_DIFF__\ndiff --git a/web/src/App.tsx b/web/src/App.tsx\n--- a/web/src/App.tsx\n+++ b/web/src/App.tsx\n@@ -1 +1 @@\n-old\n+new\n'; }
     if (!command.includes('command -v')) {
       const path = command.includes("'~/work'") ? '~/work' : '~';
       const entries = path === '~'
@@ -136,10 +137,9 @@ test('agent tabs persist across browsers and service restarts without eager proc
     const reviewDrawer = page.getByRole('complementary', { name: '代码审查' });
     await expect(reviewDrawer.getByRole('heading', { name: '未暂存' })).toBeVisible();
     await expect(reviewDrawer.getByRole('heading', { name: '未跟踪' })).toBeVisible();
-    await expect(reviewDrawer.getByRole('button', { name: 'M web/src/App.tsx' })).toBeVisible();
-    await expect(reviewDrawer.locator('.diff-add')).toContainText('+new');
-    await reviewDrawer.getByRole('radio', { name: '树形' }).click();
+    await expect(reviewDrawer.getByRole('radio', { name: '树形' })).toBeChecked();
     await expect(reviewDrawer.getByRole('treeitem', { name: 'web' }).first()).toHaveAttribute('aria-expanded', 'true');
+    await expect(reviewDrawer.locator('.diff-add')).toContainText('+new');
     await page.screenshot({ path: testInfo.outputPath('workspace-tools-tree.png'), fullPage: true });
     await reviewDrawer.getByRole('treeitem', { name: 'web' }).first().locator(':scope > button').click();
     await expect(reviewDrawer.getByRole('treeitem', { name: 'web' }).first()).toHaveAttribute('aria-expanded', 'false');
@@ -147,7 +147,16 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await expect(reviewDrawer.getByRole('button', { name: 'M web/src/App.tsx' })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('workspace-tools.png'), fullPage: true });
     await page.keyboard.press('Control+Shift+KeyG');
-    await expect(page.locator('.tool-drawer')).toHaveCount(0);
+    await expect(reviewDrawer).toBeHidden();
+    await page.keyboard.press('Control+Shift+KeyG');
+    await expect(reviewDrawer).toBeVisible();
+    await expect(reviewDrawer.getByRole('radio', { name: '平铺' })).toBeChecked();
+    expect(gitStatusReads).toBe(1);
+    expect(gitDiffReads).toBe(1);
+    await reviewDrawer.getByRole('button', { name: '刷新' }).click();
+    await expect.poll(() => gitStatusReads).toBe(2);
+    await expect.poll(() => gitDiffReads).toBe(2);
+    await page.keyboard.press('Control+Shift+KeyG');
     const shellToolButton = page.getByRole('button', { name: '辅助终端' });
     await shellToolButton.hover();
     await expect(shellToolButton).toHaveCSS('width', '40px');

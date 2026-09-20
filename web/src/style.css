@@ -105,6 +105,7 @@ h1, h2, p { margin-top: 0; }
 .tool-rail button:hover::after, .tool-rail button:focus-visible::after { opacity: 1; transform: translate(0, -50%); }
 .tool-rail button[aria-pressed="true"] { color: var(--strong); background: var(--active); border-color: color-mix(in srgb, var(--muted) 58%, var(--border)); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--muted) 70%, var(--border)), -7px 0 20px #0003; }
 .tool-drawer { position: absolute; inset: 8px 42px 8px 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--background); box-shadow: -18px 0 45px #0005, 0 8px 24px #0002; pointer-events: auto; }
+.tool-drawer[hidden] { display: none; }
 .tool-close { position: absolute; top: 9px; left: 10px; z-index: 2; width: 26px; height: 26px; padding: 0; border-color: transparent; background: transparent; color: var(--muted); font-size: 18px; }
 .shell-tool, .review-tool { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tool-header { height: 46px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 18px 0 48px; border-bottom: 1px solid var(--border); background: var(--surface); }

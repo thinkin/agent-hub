@@ -48,12 +48,15 @@ export function validGitPath(path: string) {
 export async function gitDiff(agent: Agent, cwd: string, path: string, kind: GitChangeKind, run = runRemote): Promise<GitDiff> {
   if (!validGitPath(path)) throw new Error('Git 文件路径无效');
   const target = quote(path);
+  const validateTarget = kind === 'untracked' ? `{ test -e ${target} || test -L ${target}; }\n` : '';
   const diff = kind === 'staged'
     ? `git diff --cached --no-ext-diff --no-color --unified=3 -- ${target}`
     : kind === 'unstaged'
       ? `git diff --no-ext-diff --no-color --unified=3 -- ${target}`
       : `git diff --no-index --no-ext-diff --no-color --unified=3 -- /dev/null ${target} || test $? -eq 1`;
-  const command = `${environment(agent, cwd)}printf '${diffMarker}\n'; { ${diff}; } | head -c ${maxDiffBytes + 1}`;
+  // Porcelain status paths are relative to the repository root, even when the
+  // workspace itself points at a subdirectory. Run the matching diff there too.
+  const command = `${environment(agent, cwd)}set -e\ncd "$(git rev-parse --show-toplevel)"\n${validateTarget}printf '${diffMarker}\n'; { ${diff}; } | head -c ${maxDiffBytes + 1}`;
   const output = await run(agent, command, '');
   const marker = output.lastIndexOf(`${diffMarker}\n`);
   if (marker < 0) throw new Error('Git diff 返回格式无效');

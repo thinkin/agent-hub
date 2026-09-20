@@ -155,6 +155,24 @@ test('Git review parses staged, unstaged and untracked changes and validates pat
   assert.equal(nested[0].name, 'web'); assert.deepEqual(nested[0].children.map(node => node.name), ['src', 'test.ts']); assert.equal(nested[0].children[0].children[0].change?.path, 'web/src/App.tsx');
 });
 
+test('Git review resolves status paths from the repository root when the workspace is a subdirectory', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-hub-git-'));
+  const workspace = join(directory, 'skills', 'example');
+  try {
+    await mkdir(workspace, { recursive: true });
+    execFileSync('git', ['init', '-q', directory]);
+    await writeFile(join(directory, 'untracked.txt'), 'visible from a nested workspace\n');
+    const localAgent = { ...agentInput.parse({ name: 'Local Git agent', connection: 'local', target: 'local', cwd: workspace }), id: randomUUID() };
+    const status = await gitStatus(localAgent, workspace);
+    assert.ok(status.changes.some(change => change.kind === 'untracked' && change.path === 'untracked.txt'));
+    const diff = await gitDiff(localAgent, workspace, 'untracked.txt', 'untracked');
+    assert.match(diff.diff, /\+visible from a nested workspace/);
+    await assert.rejects(gitDiff(localAgent, workspace, 'missing.txt', 'untracked'));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('agent adapters encapsulate native launch and resume commands', async () => {
   const trackerRun = async (_agent: unknown, command: string) => command.includes('pwd -P') ? '/work\n' : '__AGENT_HUB_JSON__' + JSON.stringify({ items: [], total: 0, warnings: [] });
   const claude = new ClaudeAdapter(), codex = new CodexAdapter(trackerRun), traex = new TraexAdapter(trackerRun);
