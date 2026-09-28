@@ -182,10 +182,12 @@ test('agent adapters encapsulate native launch and resume commands', async () =>
     assert.match(claudePlan.command, /--session-id/); assert.ok(claudePlan.agentSessionId);
     const codexAgent = { ...agent, type: 'codex' as const, executable: 'codex' };
     const codexPlan = await codex.prepareLaunch(codexAgent, '/work', id);
-    assert.match(codexPlan.command, new RegExp(`'codex' resume '${id}'`)); assert.equal(codexPlan.agentSessionId, id);
+    assert.match(codexPlan.command, new RegExp(`'codex' --no-alt-screen resume '${id}'`)); assert.equal(codexPlan.agentSessionId, id);
     // Codex and TraeX new sessions launch without a pre-assigned id and backfill the real one.
     const codexNew = await codex.prepareLaunch(codexAgent, '/work');
-    assert.doesNotMatch(codexNew.command, /--session-id/); assert.equal(codexNew.agentSessionId, undefined); assert.equal(typeof codexNew.resolveSessionId, 'function');
+    assert.match(codexNew.command, /'codex' --no-alt-screen/); assert.doesNotMatch(codexNew.command, /--session-id/); assert.equal(codexNew.agentSessionId, undefined); assert.equal(typeof codexNew.resolveSessionId, 'function');
+    const codexPicker = await codex.prepareLaunch(codexAgent, '/work', undefined, true);
+    assert.match(codexPicker.command, /'codex' --no-alt-screen resume/); assert.equal(codexPicker.resolveSessionId, undefined);
     const traexAgent = { ...agent, type: 'traex' as const, executable: 'traex' };
     const traexPlan = await traex.prepareLaunch(traexAgent, '/work');
     assert.doesNotMatch(traexPlan.command, /--session-id/); assert.equal(traexPlan.agentSessionId, undefined); assert.equal(typeof traexPlan.resolveSessionId, 'function');

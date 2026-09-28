@@ -12,11 +12,13 @@ export class CodexAdapter extends BaseAgentAdapter {
     return agent.configDir ? `export CODEX_HOME=${remotePath(agent.configDir)}\n` : '';
   }
   protected validateHelp(output: string) {
-    if (!output.includes('resume') || !output.includes('--cd')) throw new Error('需要支持 resume 和 --cd 的 Codex CLI');
+    if (!output.includes('resume') || !output.includes('--cd') || !output.includes('--no-alt-screen')) {
+      throw new Error('需要支持 resume、--cd 和 --no-alt-screen 的 Codex CLI');
+    }
   }
   async prepareLaunch(agent: Agent, cwd: string, sessionId?: string, picker = false) {
     const option = sessionId ? `resume ${quote(sessionId)}` : picker ? 'resume' : '';
-    const command = this.inDirectory(agent, cwd, `exec -- ${this.executable(agent)} ${option}`.trimEnd());
+    const command = this.inDirectory(agent, cwd, `exec -- ${this.executable(agent)} --no-alt-screen ${option}`.trimEnd());
     const tracking = !sessionId && !picker ? this.prepareThreadTracking(agent, cwd) : undefined;
     return {
       command, agentSessionId: sessionId,
