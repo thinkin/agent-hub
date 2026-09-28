@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, mergeConversations, sameEnvironment, tabSession, hostKey, type Agent, type AgentType, type Config, type Conversation, type DirectoryListing, type DiscoverResult, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
-import { applyTheme, storedTheme, type ThemeName } from './theme';
 import WorkspaceTools from './WorkspaceTools';
 const Terminal = lazy(() => import('./Terminal'));
 const emptyAgent = { name: '', type: 'claude-code' as const, connection: 'ssh' as const, target: '', cwd: '~', executable: 'claude', configDir: '', initScript: '' };
@@ -32,7 +31,7 @@ function splitDirectoryQuery(value: string) {
 }
 function AgentIcon({ type, size = 18, labelled = true }: { type: Agent['type']; size?: number; labelled?: boolean }) {
   if (type === 'claude-code') return <span className="agent-icon claude-icon" title={labelled ? 'Claude Code' : undefined} aria-hidden={labelled ? undefined : true}><svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2.25v19.5M2.25 12h19.5M5.1 5.1l13.8 13.8M18.9 5.1 5.1 18.9M8.27 2.98l7.46 18.04M21.02 8.27 2.98 15.73M15.73 2.98 8.27 21.02M2.98 8.27l18.04 7.46" /></svg>{labelled && <span className="sr-only">Claude Code</span>}</span>;
-  if (type === 'codex') return <span className="agent-icon codex-icon" title={labelled ? 'Codex' : undefined} aria-hidden={labelled ? undefined : true}><img className="codex-dark" src="/codex-icon-dark.png" width={size} height={size} alt="" /><img className="codex-light" src="/codex-icon-light.png" width={size} height={size} alt="" />{labelled && <span className="sr-only">Codex</span>}</span>;
+  if (type === 'codex') return <span className="agent-icon codex-icon" title={labelled ? 'Codex' : undefined} aria-hidden={labelled ? undefined : true}><img src="/codex-icon-dark.png" width={size} height={size} alt="" />{labelled && <span className="sr-only">Codex</span>}</span>;
   return <span className="agent-icon traex-icon" title={labelled ? 'TraeX' : undefined} aria-hidden={labelled ? undefined : true}><img src="/traex-icon.png" width={size} height={size} alt="" />{labelled && <span className="sr-only">TraeX</span>}</span>;
 }
 
@@ -312,7 +311,6 @@ export default function App() {
   const [modal, setModal] = useState<Agent | undefined>(undefined), [managing, setManaging] = useState(false), [registering, setRegistering] = useState(false);
   const [dialog, setDialog] = useState<'open' | null>(null);
   const [launcherAgentId, setLauncherAgentId] = useState<string | null>(null);
-  const [theme, setTheme] = useState<ThemeName>(storedTheme);
   const [workspaceTool, setWorkspaceTool] = useState<'shell' | 'review' | null>(null);
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const tabsViewport = useRef<HTMLDivElement>(null);
@@ -357,7 +355,6 @@ export default function App() {
     window.addEventListener('keydown', shortcut, true);
     return () => window.removeEventListener('keydown', shortcut, true);
   }, [active?.id, activeAgent?.id, changedEnvironment]);
-  useEffect(() => { applyTheme(theme); }, [theme]);
   useLayoutEffect(() => {
     const viewport = tabsViewport.current, tab = active && document.getElementById(`tab-${active.id}`)?.parentElement;
     if (!viewport || !tab) return;
@@ -468,7 +465,7 @@ export default function App() {
   return <div className="workspace">
     <a className="skip-link" href="#main">跳到终端区域</a>
     <header className="appbar">
-      <span className="brand" role="img" aria-label="Agent Hub" title="Agent Hub"><img className="brand-light" src="/agent-hub-lockup-light.png" alt="" /><img className="brand-dark" src="/agent-hub-lockup-dark.png" alt="" /></span>
+      <span className="brand" role="img" aria-label="Agent Hub" title="Agent Hub"><img src="/agent-hub-lockup-dark.png" alt="" /></span>
       <div className="agent-controls" role="group" aria-label="Agent 管理">
         <button className="manage-button" aria-label="管理 Agents" title="管理 Agents" disabled={!ready || busy} onClick={() => setManaging(true)}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="8" width="14" height="10" rx="2.5" /><path d="M12 8V4.5M12 4.5a1.4 1.4 0 1 0 0-2.8 1.4 1.4 0 0 0 0 2.8Z" /><path d="M2.6 12v3M21.4 12v3" /><circle cx="9.2" cy="13" r="1.1" fill="currentColor" stroke="none" /><circle cx="14.8" cy="13" r="1.1" fill="currentColor" stroke="none" /></svg>
@@ -476,16 +473,6 @@ export default function App() {
         </button>
       </div>
       {active && <div className="appbar-active" title={`${titleFor(active)}\n${activeAgent ? `${activeAgent.name} · ${activeAgent.connection === 'local' ? '本机' : activeAgent.target}` : ''}\n${active.cwd}`}><span className="appbar-active-title">{titleFor(active)}</span><span className="appbar-active-meta">{activeAgent && <><AgentIcon type={activeAgent.type} size={12} labelled={false} /><span className="appbar-active-agent">{activeAgent.connection === 'local' ? `本机 · ${activeAgent.target}` : activeAgent.target}</span><span aria-hidden="true">·</span></>}<code className="appbar-cwd">{active.cwd}</code></span></div>}
-      <div className="theme-switch" role="radiogroup" aria-label="颜色主题">
-        <button type="button" role="radio" aria-checked={theme === 'modernLight'} className={`theme-option ${theme === 'modernLight' ? 'selected' : ''}`} title="白天（浅色）" onClick={() => setTheme('modernLight')}>
-          <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><circle cx="10" cy="10" r="3.4" /><path d="M10 2v2m0 12v2M2 10h2m12 0h2M4.35 4.35l1.42 1.42m8.46 8.46 1.42 1.42m0-11.3-1.42 1.42m-8.46 8.46-1.42 1.42" /></svg>
-          <span className="sr-only">浅色</span>
-        </button>
-        <button type="button" role="radio" aria-checked={theme === 'modernDark'} className={`theme-option ${theme === 'modernDark' ? 'selected' : ''}`} title="黑夜（深色）" onClick={() => setTheme('modernDark')}>
-          <svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="M15.5 11.5A6 6 0 0 1 8.5 4.5a6 6 0 1 0 7 7z" /></svg>
-          <span className="sr-only">深色</span>
-        </button>
-      </div>
     </header>
     <div className="tabbar">
       <div className="tabs" ref={tabsViewport} role="tablist" aria-label="打开的对话">{groups.map(group => (
@@ -504,9 +491,9 @@ export default function App() {
       {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
       {titleError && <p className="sync-warning">{titleError}</p>}
       {active ? <section className="active-workspace" id="terminal-panel" role="tabpanel" aria-labelledby={`tab-${active.id}`}>
-        {mountedTerminals.map(({ tab, session }) => <Suspense key={tab.id} fallback={tab.id === active.id ? <div className="loading">加载终端…</div> : null}><Terminal sessionId={session.id} theme={theme} active={tab.id === active.id} /></Suspense>)}
+        {mountedTerminals.map(({ tab, session }) => <Suspense key={tab.id} fallback={tab.id === active.id ? <div className="loading">加载终端…</div> : null}><Terminal sessionId={session.id} active={tab.id === active.id} /></Suspense>)}
         {!activeSession && <div className="empty-workspace"><h2>{titleFor(active)}</h2><p className="subtle">{changedEnvironment ? 'Agent 环境已更改，无法在当前环境恢复此 tab。' : active.agentSessionId ? busy ? '正在恢复 Agent 对话…' : 'Agent 对话暂未运行，点击当前 tab 可重试。' : '历史选择器没有可靠的对话标识，请重新打开对话。'}</p></div>}
-        {!changedEnvironment && activeAgent && <WorkspaceTools key={active.id} tab={active} theme={theme} open={workspaceTool} onOpen={setWorkspaceTool} onClose={() => setWorkspaceTool(null)} />}
+        {!changedEnvironment && activeAgent && <WorkspaceTools key={active.id} tab={active} open={workspaceTool} onOpen={setWorkspaceTool} onClose={() => setWorkspaceTool(null)} />}
       </section> : launcherAgent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher agents={config.agents} agent={launcherAgent} onAgentChange={setLauncherAgentId} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} recentCwds={config.recentCwds} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
     </main>
     {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onRegister={() => { setManaging(false); setRegistering(true); }} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}

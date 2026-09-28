@@ -15,8 +15,13 @@ import { equalSecret } from '../src/server.js';
 import { gitDiff, gitStatus, validGitPath } from '../src/git.js';
 import { mergeConversations, tabSession, type Session } from '../web/src/api.js';
 import { buildChangeTree } from '../web/src/WorkspaceTools.js';
+import { terminalMinimumContrastRatio } from '../web/src/theme.js';
 
 const agent = { ...agentInput.parse({ name: 'Development', target: 'dev-host', cwd: '~/project' }), id: randomUUID() };
+
+test('terminal enforces WCAG AA contrast for CLI-painted backgrounds', () => {
+  assert.equal(terminalMinimumContrastRatio, 4.5);
+});
 
 test('configuration is atomic, private, metadata-only and serializes concurrent updates', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'mam-config-'));

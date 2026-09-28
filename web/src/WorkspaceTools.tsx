@@ -1,6 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { api, type GitChange, type GitChangeKind, type GitDiff, type GitStatus, type Session, type WorkspaceTab } from './api';
-import type { ThemeName } from './theme';
 
 const Terminal = lazy(() => import('./Terminal'));
 type Tool = 'shell' | 'review';
@@ -86,7 +85,7 @@ function CodeReview({ tab }: { tab: WorkspaceTab }) {
   </div>;
 }
 
-export default function WorkspaceTools({ tab, theme, open, onOpen, onClose }: { tab: WorkspaceTab; theme: ThemeName; open: Tool | null; onOpen(tool: Tool): void; onClose(): void }) {
+export default function WorkspaceTools({ tab, open, onOpen, onClose }: { tab: WorkspaceTab; open: Tool | null; onOpen(tool: Tool): void; onClose(): void }) {
   const [shell, setShell] = useState<Session | null>(null), [shellBusy, setShellBusy] = useState(false), [shellError, setShellError] = useState('');
   const [shellStarted, setShellStarted] = useState(false);
   const [reviewOpened, setReviewOpened] = useState(open === 'review');
@@ -109,7 +108,7 @@ export default function WorkspaceTools({ tab, theme, open, onOpen, onClose }: { 
     </div>
     {open === 'shell' && <aside className="tool-drawer" aria-label="辅助终端">
       <button type="button" className="tool-close" aria-label="收起工具抽屉" title={`收起 · ${open === 'shell' ? 'Ctrl+Shift+T' : 'Ctrl+Shift+G'}`} onClick={onClose}>×</button>
-      <div className="shell-tool"><header className="tool-header"><div><strong>辅助终端</strong><code>{tab.cwd}</code></div>{shell && <button type="button" onClick={() => void stopShell()} disabled={shellBusy}>结束终端</button>}</header>{shellError && <div className="tool-error" role="alert">{shellError}</div>}{shell ? <Suspense fallback={<div className="tool-empty">加载终端…</div>}><Terminal sessionId={tab.id} endpoint="shell" label="辅助终端" processLabel="Shell" theme={theme} active onExit={() => setShell(null)} /></Suspense> : <div className="tool-empty">{shellBusy ? '启动终端…' : <><strong>终端已结束</strong><button type="button" onClick={() => { setShellError(''); setShellBusy(true); void api(`/workspace/${tab.id}/shell`, 'DELETE').catch(() => {}).then(() => api<Session>(`/workspace/${tab.id}/shell`, 'POST')).then(next => { setShellStarted(true); setShell(next); }).catch(error => setShellError(errorText(error))).finally(() => setShellBusy(false)); }}>重新启动</button></>}</div>}</div>
+      <div className="shell-tool"><header className="tool-header"><div><strong>辅助终端</strong><code>{tab.cwd}</code></div>{shell && <button type="button" onClick={() => void stopShell()} disabled={shellBusy}>结束终端</button>}</header>{shellError && <div className="tool-error" role="alert">{shellError}</div>}{shell ? <Suspense fallback={<div className="tool-empty">加载终端…</div>}><Terminal sessionId={tab.id} endpoint="shell" label="辅助终端" processLabel="Shell" active onExit={() => setShell(null)} /></Suspense> : <div className="tool-empty">{shellBusy ? '启动终端…' : <><strong>终端已结束</strong><button type="button" onClick={() => { setShellError(''); setShellBusy(true); void api(`/workspace/${tab.id}/shell`, 'DELETE').catch(() => {}).then(() => api<Session>(`/workspace/${tab.id}/shell`, 'POST')).then(next => { setShellStarted(true); setShell(next); }).catch(error => setShellError(errorText(error))).finally(() => setShellBusy(false)); }}>重新启动</button></>}</div>}</div>
     </aside>}
     {reviewOpened && <aside className="tool-drawer" aria-label="代码审查" hidden={open !== 'review'}>
       <button type="button" className="tool-close" aria-label="收起工具抽屉" title="收起 · Ctrl+Shift+G" onClick={onClose}>×</button>

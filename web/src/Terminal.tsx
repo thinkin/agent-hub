@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { themes, type ThemeName } from './theme';
+import { terminalMinimumContrastRatio, terminalTheme } from './theme';
 
-export default function Terminal({ sessionId, theme, active, endpoint = 'terminal', label = 'Agent 终端', processLabel = 'Agent 进程', onExit }: { sessionId: string; theme: ThemeName; active: boolean; endpoint?: 'terminal' | 'shell'; label?: string; processLabel?: string; onExit?(): void }) {
+export default function Terminal({ sessionId, active, endpoint = 'terminal', label = 'Agent 终端', processLabel = 'Agent 进程', onExit }: { sessionId: string; active: boolean; endpoint?: 'terminal' | 'shell'; label?: string; processLabel?: string; onExit?(): void }) {
   const host = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerminal | null>(null);
   const activeRef = useRef(active);
@@ -17,7 +17,7 @@ export default function Terminal({ sessionId, theme, active, endpoint = 'termina
   const takeover = useRef(false);
   const autoTakeover = useRef(false);
   useEffect(() => {
-    const terminal = new XTerminal({ cursorBlink: true, fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', fontSize: 13, lineHeight: 1.3, scrollback: 1500, theme: themes[theme].terminal, allowProposedApi: false });
+    const terminal = new XTerminal({ cursorBlink: true, fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', fontSize: 13, lineHeight: 1.3, scrollback: 1500, minimumContrastRatio: terminalMinimumContrastRatio, theme: terminalTheme, allowProposedApi: false });
     terminalRef.current = terminal;
     const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host.current!);
     let disposed = false, ready = false, reconnect: ReturnType<typeof setTimeout> | undefined;
@@ -81,7 +81,6 @@ export default function Terminal({ sessionId, theme, active, endpoint = 'termina
     const frame = requestAnimationFrame(() => { resizeRef.current?.(); terminalRef.current?.focus(); });
     return () => cancelAnimationFrame(frame);
   }, [active]);
-  useEffect(() => { if (terminalRef.current) terminalRef.current.options.theme = themes[theme].terminal; }, [theme]);
   return <div className="terminal-panel" data-state={state === '已连接' ? 'connected' : 'other'} hidden={!active}>
     {state !== '已连接' && <div className="terminal-status"><span className="muted-dot" />{state}
       {state === '此终端由其他页面控制' && <button onClick={() => { takeover.current = true; setAttempt(x => x + 1); }}>接管终端</button>}
