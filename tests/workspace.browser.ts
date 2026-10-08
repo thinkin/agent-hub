@@ -315,6 +315,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await expect(page.getByRole('option', { name: 'Dev Claude' }).locator('.claude-icon')).toBeVisible();
     await expect(page.getByRole('option', { name: 'Second Claude' }).locator('.claude-icon')).toBeVisible();
     await page.getByRole('option', { name: 'Second Claude', exact: true }).click();
+    await page.getByRole('dialog', { name: '打开对话' }).getByRole('textbox', { name: '工作目录', exact: true }).fill('/srv/remembered');
     await page.getByRole('dialog', { name: '打开对话' }).getByRole('button', { name: /接入之前已有的对话/ }).click();
     // Same conversation under a different agent opens a new tab in that agent's group.
     await expect(page.getByRole('tab')).toHaveCount(3);
@@ -328,6 +329,8 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.reload();
     await expect(page.getByRole('tab')).toHaveCount(2);
     await openPicker();
+    await expect(page.getByRole('dialog', { name: '打开对话' }).getByRole('combobox', { name: '选择 Agent' })).toContainText('Second Claude');
+    await expect(page.getByRole('dialog', { name: '打开对话' }).getByRole('textbox', { name: '工作目录', exact: true })).toHaveValue('/srv/remembered');
     await chooseAgent('Dev Claude');
     await page.getByRole('button', { name: /修复终端刷新问题.*活跃/ }).click();
     await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
