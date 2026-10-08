@@ -10,6 +10,49 @@ import { AuxiliaryShells, Sessions } from '../src/sessions.js';
 import { ClaudeAdapter } from '../src/agents/claude.js';
 import { AgentRegistry } from '../src/agents/registry.js';
 
+test('terminal can unmount before snapshot rendering finishes', async ({ page }) => {
+  const directory = await mkdtemp(join(tmpdir(), 'mam-terminal-dispose-'));
+  const store = await new ConfigStore(directory).load();
+  const app = await createApp({ store, dev: true });
+  const origin = await app.listen(0);
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.stack ?? error.message));
+  try {
+    await page.goto(`${origin}/#token=${app.token}`);
+    await expect(page.getByRole('button', { name: '注册第一个 Agent' })).toBeEnabled();
+    await page.evaluate(async project => {
+      const reactPath = `/@fs${project}/node_modules/.vite/deps/react.js`;
+      const domPath = `/@fs${project}/node_modules/.vite/deps/react-dom.js`;
+      const clientPath = `/@fs${project}/node_modules/.vite/deps/react-dom_client.js`;
+      const terminalPath = '/src/Terminal.tsx';
+      const [{ default: React }, { default: { flushSync } }, { default: { createRoot } }, { default: Terminal }] = await Promise.all([import(reactPath), import(domPath), import(clientPath), import(terminalPath)]);
+      const fixture = window as typeof window & { snapshotAndUnmount?: () => void };
+      let socket: WebSocket;
+      window.WebSocket = class {
+        static OPEN = 1; static CONNECTING = 0;
+        readyState = 1;
+        constructor() { socket = this as unknown as WebSocket; }
+        send() {} close() { this.readyState = 3; }
+      } as unknown as typeof WebSocket;
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;inset:100px;';
+      document.body.append(host);
+      const root = createRoot(host);
+      flushSync(() => root.render(React.createElement(Terminal, { sessionId: 'fixture', active: true })));
+      fixture.snapshotAndUnmount = () => {
+        for (let index = 0; index < 2; index++) socket.onmessage!({ data: JSON.stringify({ type: 'snapshot', cols: 80, rows: 24, status: 'running', data: '' }) } as MessageEvent);
+        flushSync(() => root.unmount());
+        host.remove();
+      };
+    }, process.cwd());
+    await expect(page.locator('.terminal-host .xterm')).toBeVisible();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await page.evaluate(() => (window as typeof window & { snapshotAndUnmount(): void }).snapshotAndUnmount());
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50)))));
+    expect(errors).toEqual([]);
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('restored overflow tab stays visible when earlier titles arrive', async ({ page }, testInfo) => {
   const directory = await mkdtemp(join(tmpdir(), 'mam-tab-scroll-'));
   const store = await new ConfigStore(directory).load();
@@ -109,7 +152,11 @@ test('agent tabs persist across browsers and service restarts without eager proc
   let app = await createApp({ store, sessions, auxiliaryShells, registry: new AgentRegistry([createClaude()], discoverRun), runCommand: discoverRun, dev: true });
   let origin = await app.listen(0);
   const errors: string[] = [];
-  page.on('pageerror', error => errors.push(error.message));
+  const recordPageError = (error: Error) => {
+    errors.push(error.message);
+    void testInfo.attach('page-error-stack', { body: error.stack ?? error.message, contentType: 'text/plain' });
+  };
+  page.on('pageerror', recordPageError);
   const openPicker = async () => { await page.getByRole('button', { name: '添加对话', exact: true }).click(); await expect(page.getByRole('dialog', { name: '打开对话' })).toBeVisible(); };
   const chooseAgent = async (name: string) => { await page.getByRole('dialog', { name: '打开对话' }).getByRole('combobox', { name: '选择 Agent' }).click(); await page.getByRole('option', { name, exact: true }).click(); };
   const chooseLauncherAgent = async (name: string) => { await page.getByRole('region', { name: '打开对话' }).getByRole('combobox', { name: '选择 Agent' }).click(); await page.getByRole('option', { name, exact: true }).click(); };
@@ -295,7 +342,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.close();
     const freshContext = await browser.newContext();
     page = await freshContext.newPage();
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', recordPageError);
     await page.goto(`${origin}/#token=${app.token}`);
     await expect(page.getByRole('tab')).toHaveCount(3);
     await expect(activeTab()).toContainText('修复终端刷新问题');
@@ -327,7 +374,7 @@ test('agent tabs persist across browsers and service restarts without eager proc
     origin = await app.listen(0);
     const beforeResume = spawns;
     page = await freshContext.newPage();
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', recordPageError);
     await page.goto(`${origin}/#token=${app.token}`);
     await expect(page.getByRole('tab')).toHaveCount(4);
     await expect(activeTab()).toContainText('修复终端刷新问题');

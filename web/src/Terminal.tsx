@@ -73,7 +73,9 @@ export default function Terminal({ sessionId, active, endpoint = 'terminal', lab
       disposed = true; terminalRef.current = null; resizeRef.current = null; clearTimeout(reconnect); observer.disconnect(); input.dispose();
       if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => ws.close();
       else if (ws.readyState === WebSocket.OPEN) ws.close();
-      terminal.dispose();
+      // xterm 5 leaves snapshot-reset frame callbacks queued. Drain writes and let
+      // those callbacks run while the renderer still exists before releasing it.
+      terminal.write('', () => requestAnimationFrame(() => terminal.dispose()));
     };
   }, [sessionId, endpoint, processLabel, attempt]);
   useEffect(() => {
