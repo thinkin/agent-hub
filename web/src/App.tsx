@@ -336,7 +336,6 @@ export default function App() {
   // fall back to the id its live session has backfilled so titles resolve before it is persisted.
   const resolvedSessionId = (tab: WorkspaceTab) => { const a = agentOf(tab); return tab.agentSessionId ?? (a ? tabSession(tab, a, sessions)?.agentSessionId : undefined); };
   const titleFor = (tab: WorkspaceTab) => { const id = resolvedSessionId(tab); return titles[tab.agentId]?.find(item => item.id === id)?.title || '新对话'; };
-  const activeTitle = active ? titleFor(active) : '';
   const changedEnvironment = !!active && (!activeAgent || !sameEnvironment(active, activeAgent));
   const previousActiveTab = useRef<string | null>(workspace.activeTabId);
   useEffect(() => {
@@ -359,14 +358,17 @@ export default function App() {
     const viewport = tabsViewport.current, tab = active && document.getElementById(`tab-${active.id}`)?.parentElement;
     if (!viewport || !tab) return;
     const reveal = () => {
-      const left = tab.offsetLeft, right = left + tab.offsetWidth;
-      if (left < viewport.scrollLeft) viewport.scrollLeft = left;
-      else if (right > viewport.scrollLeft + viewport.clientWidth) viewport.scrollLeft = right - viewport.clientWidth;
+      const bounds = viewport.getBoundingClientRect(), selected = tab.getBoundingClientRect();
+      const left = bounds.left + viewport.clientLeft, right = left + viewport.clientWidth;
+      if (selected.left < left) viewport.scrollLeft += selected.left - left;
+      else if (selected.right > right) viewport.scrollLeft += selected.right - right;
     };
     reveal();
-    const observer = new ResizeObserver(reveal); observer.observe(viewport); observer.observe(tab);
+    const observer = new ResizeObserver(reveal); observer.observe(viewport);
+    // Earlier titles can move the selected tab without changing its own width.
+    viewport.querySelectorAll('.tab, .tab-group').forEach(element => observer.observe(element));
     return () => observer.disconnect();
-  }, [active?.id, activeTitle]);
+  }, [active?.id, tabs]);
   const loadSessions = useCallback(async () => { const data = await api<Session[]>('/sessions'); setSessions(data); return data; }, []);
   const changeWorkspace = useCallback((change: object) => {
     const task = queue.current.then(async () => { const next = await api<Workspace>('/workspace', 'PATCH', change); setWorkspace(next); });

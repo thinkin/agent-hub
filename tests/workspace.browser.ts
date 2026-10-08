@@ -10,6 +10,54 @@ import { AuxiliaryShells, Sessions } from '../src/sessions.js';
 import { ClaudeAdapter } from '../src/agents/claude.js';
 import { AgentRegistry } from '../src/agents/registry.js';
 
+test('restored overflow tab stays visible when earlier titles arrive', async ({ page }, testInfo) => {
+  const directory = await mkdtemp(join(tmpdir(), 'mam-tab-scroll-'));
+  const store = await new ConfigStore(directory).load();
+  const agents = ['First', 'Second'].map(name => ({ id: randomUUID(), name, type: 'claude-code' as const, connection: 'ssh' as const, target: 'fixture-host', cwd: '/fixture', executable: 'claude', configDir: '', initScript: '' }));
+  const tabs = Array.from({ length: 16 }, (_, index) => ({ id: randomUUID(), agentId: agents[index < 8 ? 0 : 1].id, sessionId: randomUUID(), agentSessionId: randomUUID(), cwd: '/fixture', type: 'claude-code' as const, connection: 'ssh' as const, target: 'previous-fixture-host', configDir: '' }));
+  await store.update(config => { config.agents = agents; config.workspace = { tabs, activeTabId: tabs.at(-1)!.id }; });
+  const app = await createApp({ store, dev: true });
+  const origin = await app.listen(0);
+  let releaseTitles!: () => void;
+  const holdTitles = () => new Promise<void>(resolve => { releaseTitles = resolve; });
+  let titlesReady = holdTitles();
+  await page.route('**/api/agents/*/session-titles', async route => {
+    await titlesReady;
+    const agentId = new URL(route.request().url()).pathname.split('/')[3];
+    const items = tabs.filter(tab => tab.agentId === agentId).map(tab => ({ id: tab.agentSessionId, cwd: tab.cwd, modified: 1, title: tab.id === tabs.at(-1)!.id ? '新对话' : '异步加载后变宽的历史对话标题' }));
+    await route.fulfill({ json: { items, total: items.length, warnings: [] } });
+  });
+  const expectSelectedVisible = async () => {
+    await expect.poll(() => page.locator('.tab.selected').evaluate(tab => {
+      const viewport = tab.closest('.tabs')!.getBoundingClientRect(), rect = tab.getBoundingClientRect();
+      return rect.left >= viewport.left - 1 && rect.right <= viewport.right + 1;
+    })).toBe(true);
+  };
+  try {
+    await page.goto(`${origin}/#token=${app.token}`);
+    for (const width of [1440, 390]) {
+      if (width === 390) {
+        titlesReady = holdTitles();
+        await page.setViewportSize({ width, height: 720 });
+        await page.reload();
+      }
+      await expect(page.getByRole('tab')).toHaveCount(16);
+      await expectSelectedVisible();
+      releaseTitles();
+      await expect(page.getByRole('tab').first()).toContainText('异步加载后变宽的历史对话标题');
+      await expect(page.getByRole('tab', { selected: true })).toContainText('新对话');
+      await expectSelectedVisible();
+      await page.screenshot({ path: testInfo.outputPath(`restored-overflow-${width}.png`) });
+      await page.getByRole('tab', { selected: true }).press('Home');
+      await expect(page.getByRole('tab').first()).toHaveAttribute('aria-selected', 'true');
+      await expectSelectedVisible();
+      await page.getByRole('tab', { selected: true }).press('End');
+      await expect(page.getByRole('tab').last()).toHaveAttribute('aria-selected', 'true');
+      await expectSelectedVisible();
+    }
+  } finally { releaseTitles(); await app.close(); await rm(directory, { recursive: true, force: true }); }
+});
+
 test('agent tabs persist across browsers and service restarts without eager process creation', async ({ page, browser }, testInfo) => {
   const directory = await mkdtemp(join(tmpdir(), 'mam-browser-'));
   let store = await new ConfigStore(directory).load();
