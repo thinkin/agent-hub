@@ -15,6 +15,7 @@
 - **本机与远程，统一入口** — 管理 Claude Code、Codex 与 TraeX，复用现有 SSH 配置，无需远程守护服务或 tmux。
 - **原生终端，原有体验** — 保留各个 CLI 的交互、工具与审批流程，不另造一套聊天界面。
 - **多会话，随时接回** — 一条 tab 栏同时容纳不同 Agent 的会话，按机器与 Agent 分组、可折叠；切换任务、新建或恢复历史对话，刷新或关闭网页，正在运行的 Agent 继续工作。
+- **圈选文件，交给当前 Agent** — 在只读文件审阅器中圈选文本并写下标注，逐条或同文件批量送入当前终端，由 Agent 直接修改工作区文件。
 
 ## 快速开始
 
@@ -27,6 +28,8 @@ npx --yes --registry=https://registry.npmjs.org/ @evanginx/agent-hub@latest star
 ```
 
 浏览器会自动打开工作台，已检测到的本地 Agent 自动就位。点击「+」新建对话，选择 Agent，开始你的第一个任务。
+
+需要审阅文件时，打开终端右侧的「审阅」工具（`Ctrl+Shift+G`），从文件树选择文本并圈选内容；Git 未提交变更仍可在同一抽屉的「变更」页查看。
 
 可通过 `PORT`（默认 `4317`）和 `CONFIG_DIR`（默认 `~/.agent-hub/`）自定义启动环境；`--port` / `--config-dir` 参数优先。`CONFIG_DIR` 只控制 Agent Hub 自身配置，不改变各 Agent CLI 的配置目录。
 

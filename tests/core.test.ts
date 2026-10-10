@@ -13,8 +13,9 @@ import { CodexAdapter } from '../src/agents/codex.js';
 import { TraexAdapter } from '../src/agents/traex.js';
 import { equalSecret } from '../src/server.js';
 import { gitDiff, gitStatus, validGitPath } from '../src/git.js';
+import { listWorkspaceFiles, readWorkspaceFile, validWorkspacePath } from '../src/files.js';
 import { mergeConversations, tabSession, type Session } from '../web/src/api.js';
-import { buildChangeTree } from '../web/src/WorkspaceTools.js';
+import { buildChangeTree, buildReviewPrompt, textSelection } from '../web/src/WorkspaceTools.js';
 import { terminalMinimumContrastRatio } from '../web/src/theme.js';
 
 const agent = { ...agentInput.parse({ name: 'Development', target: 'dev-host', cwd: '~/project' }), id: randomUUID() };
@@ -176,6 +177,48 @@ test('Git review resolves status paths from the repository root when the workspa
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('workspace files stay inside the workspace and honor git ignores', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-hub-files-'));
+  const outside = join(directory, 'outside.txt');
+  const workspace = join(directory, 'workspace');
+  try {
+    await mkdir(join(workspace, 'src'), { recursive: true });
+    await writeFile(join(workspace, '.gitignore'), 'ignored/\n');
+    await mkdir(join(workspace, 'ignored'));
+    await writeFile(join(workspace, 'src', 'main.ts'), 'const greeting = "hello";\n');
+    await writeFile(join(workspace, '.env.example'), 'NAME=value\n');
+    await writeFile(join(workspace, 'ignored', 'large.js'), 'ignored\n');
+    await writeFile(outside, 'secret\n');
+    execFileSync('git', ['init', '-q', workspace]);
+    const localAgent = { ...agentInput.parse({ name: 'File agent', connection: 'local', target: 'local', cwd: workspace }), id: randomUUID() };
+    const root = await listWorkspaceFiles(localAgent, workspace);
+    assert.deepEqual(root.entries.map(entry => entry.name), ['src', '.env.example', '.gitignore']);
+    assert.equal(root.repository, true);
+    const search = await listWorkspaceFiles(localAgent, workspace, '', 'main');
+    assert.deepEqual(search.entries.map(entry => entry.path), ['src/main.ts']);
+    const file = await readWorkspaceFile(localAgent, workspace, 'src/main.ts');
+    assert.equal(file.content, 'const greeting = "hello";\n');
+    assert.equal((await readWorkspaceFile(localAgent, workspace, 'src/main.ts', file.revision)).changed, false);
+    assert.equal(validWorkspacePath('src/main.ts'), true);
+    assert.equal(validWorkspacePath('../outside.txt'), false);
+    await assert.rejects(readWorkspaceFile(localAgent, workspace, '../outside.txt'), /路径无效/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('review annotations preserve exact ranges and build one bounded agent instruction', () => {
+  const content = 'first line\nsecond phrase\n';
+  const selection = textSelection(content, 12, 18);
+  assert.deepEqual(selection && [selection.startLine, selection.startColumn, selection.endLine, selection.endColumn, selection.text], [2, 2, 2, 8, 'econd ']);
+  const prompt = buildReviewPrompt('docs/review.md', [{ selection: selection!, comment: '改得更准确\u001b[31m' }]);
+  assert.match(prompt, /docs\/review\.md/);
+  assert.doesNotMatch(prompt, /位置：|L2:C2/);
+  assert.match(prompt, /econd/);
+  assert.match(prompt, /改得更准确/);
+  assert.doesNotMatch(prompt, /\u001b/);
 });
 
 test('agent adapters encapsulate native launch and resume commands', async () => {

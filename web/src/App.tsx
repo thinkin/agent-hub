@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, mergeConversations, sameEnvironment, tabSession, hostKey, type Agent, type AgentType, type Config, type Conversation, type DirectoryListing, type DiscoverResult, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
 import WorkspaceTools from './WorkspaceTools';
+import type { TerminalHandle } from './Terminal';
 const Terminal = lazy(() => import('./Terminal'));
 const emptyAgent = { name: '', type: 'claude-code' as const, connection: 'ssh' as const, target: '', cwd: '~', executable: 'claude', configDir: '', initScript: '' };
 const agentTypes: Record<AgentType, { label: string; executable: string; suffix: string }> = {
@@ -12,6 +13,7 @@ const emptyWorkspace: Workspace = { tabs: [], activeTabId: null };
 const emptyHistory: History = { items: [], total: 0, warnings: [] };
 const launcherPreferenceKey = 'agent-hub.launcher.v1';
 interface LauncherPreference { version: 1; agentId: string; cwd: string }
+type WorkspaceTool = 'shell' | 'review' | null;
 function readLauncherPreference(): LauncherPreference | null {
   try {
     const value = JSON.parse(localStorage.getItem(launcherPreferenceKey) ?? 'null');
@@ -322,13 +324,25 @@ export default function App() {
   const [modal, setModal] = useState<Agent | undefined>(undefined), [managing, setManaging] = useState(false), [registering, setRegistering] = useState(false);
   const [dialog, setDialog] = useState<'open' | null>(null);
   const [launcherPreference, setLauncherPreference] = useState<LauncherPreference | null>(readLauncherPreference);
-  const [workspaceTool, setWorkspaceTool] = useState<'shell' | 'review' | null>(null);
+  const [workspaceTools, setWorkspaceTools] = useState<Record<string, WorkspaceTool>>({});
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const tabsViewport = useRef<HTMLDivElement>(null);
+  const terminalHandles = useRef(new Map<string, TerminalHandle>());
+  const reviewFiles = useRef(new Map<string, string>());
   const launching = useRef(false);
   const activatedTabs = useRef(new Set<string>());
   const tabs = workspace.tabs;
   const active = tabs.find(tab => tab.id === workspace.activeTabId);
+  const workspaceTool = active ? workspaceTools[active.id] ?? null : null;
+  const setActiveWorkspaceTool = useCallback((value: WorkspaceTool | ((current: WorkspaceTool) => WorkspaceTool)) => {
+    const tabId = workspace.activeTabId; if (!tabId) return;
+    setWorkspaceTools(previous => {
+      const current = previous[tabId] ?? null, next = typeof value === 'function' ? value(current) : value;
+      if (current === next) return previous;
+      if (next === null) { const copy = { ...previous }; delete copy[tabId]; return copy; }
+      return { ...previous, [tabId]: next };
+    });
+  }, [workspace.activeTabId]);
   const agentOf = (tab: WorkspaceTab | undefined) => tab ? config.agents.find(a => a.id === tab.agentId) : undefined;
   const activeAgent = agentOf(active);
   const activeSession = active && activeAgent ? tabSession(active, activeAgent, sessions) : undefined;
@@ -355,11 +369,6 @@ export default function App() {
   const resolvedSessionId = (tab: WorkspaceTab) => { const a = agentOf(tab); return tab.agentSessionId ?? (a ? tabSession(tab, a, sessions)?.agentSessionId : undefined); };
   const titleFor = (tab: WorkspaceTab) => { const id = resolvedSessionId(tab); return titles[tab.agentId]?.find(item => item.id === id)?.title || '新对话'; };
   const changedEnvironment = !!active && (!activeAgent || !sameEnvironment(active, activeAgent));
-  const previousActiveTab = useRef<string | null>(workspace.activeTabId);
-  useEffect(() => {
-    if (previousActiveTab.current !== workspace.activeTabId) setWorkspaceTool(null);
-    previousActiveTab.current = workspace.activeTabId;
-  }, [workspace.activeTabId]);
   useEffect(() => {
     if (!active || !activeAgent || changedEnvironment) return;
     const shortcut = (event: KeyboardEvent) => {
@@ -367,7 +376,7 @@ export default function App() {
       const tool = event.key.toLowerCase() === 't' ? 'shell' : event.key.toLowerCase() === 'g' ? 'review' : null;
       if (!tool) return;
       event.preventDefault(); event.stopPropagation();
-      setWorkspaceTool(current => current === tool ? null : tool);
+      setActiveWorkspaceTool(current => current === tool ? null : tool);
     };
     window.addEventListener('keydown', shortcut, true);
     return () => window.removeEventListener('keydown', shortcut, true);
@@ -501,7 +510,7 @@ export default function App() {
           const status = session?.status === 'running' ? '活跃' : session ? '已退出' : '待恢复';
           return <div className={`tab ${selected ? 'selected' : ''}`} key={tab.id}>
             <button role="tab" id={`tab-${tab.id}`} aria-selected={selected} aria-controls="terminal-panel" tabIndex={selected || (!active && tabs[0]?.id === tab.id) ? 0 : -1} onClick={() => act(selectTab(tab.id))} title={`${titleFor(tab)}\n${tab.cwd}\n${status}`} onKeyDown={event => moveFocus(event, tab.id)}>{group.agent && <AgentIcon type={group.agent.type} size={14} labelled={false} />}<span className={`state-icon ${session?.status === 'running' ? 'running' : ''}`} title={status} aria-hidden="true" /><span className="tab-title">{titleFor(tab)}</span><span className="sr-only">{status}</span></button>
-            <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，Agent 会话继续运行，辅助终端将结束" onClick={() => act(changeWorkspace({ action: 'close', tabId: tab.id }))}>×</button>
+            <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，Agent 会话继续运行，辅助终端将结束" onClick={() => { reviewFiles.current.delete(tab.id); setWorkspaceTools(previous => { if (!(tab.id in previous)) return previous; const next = { ...previous }; delete next[tab.id]; return next; }); act(changeWorkspace({ action: 'close', tabId: tab.id })); }}>×</button>
           </div>;
         })}</div>
       ))}</div>
@@ -511,9 +520,9 @@ export default function App() {
       {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
       {titleError && <p className="sync-warning">{titleError}</p>}
       {active ? <section className="active-workspace" id="terminal-panel" role="tabpanel" aria-labelledby={`tab-${active.id}`}>
-        {mountedTerminals.map(({ tab, session }) => <Suspense key={tab.id} fallback={tab.id === active.id ? <div className="loading">加载终端…</div> : null}><Terminal sessionId={session.id} active={tab.id === active.id} /></Suspense>)}
+        {mountedTerminals.map(({ tab, session }) => <Suspense key={tab.id} fallback={tab.id === active.id ? <div className="loading">加载终端…</div> : null}><Terminal ref={handle => { if (handle) terminalHandles.current.set(tab.id, handle); else terminalHandles.current.delete(tab.id); }} sessionId={session.id} active={tab.id === active.id} /></Suspense>)}
         {!activeSession && <div className="empty-workspace"><h2>{titleFor(active)}</h2><p className="subtle">{changedEnvironment ? 'Agent 环境已更改，无法在当前环境恢复此 tab。' : active.agentSessionId ? busy ? '正在恢复 Agent 对话…' : 'Agent 对话暂未运行，点击当前 tab 可重试。' : '历史选择器没有可靠的对话标识，请重新打开对话。'}</p></div>}
-        {!changedEnvironment && activeAgent && <WorkspaceTools key={active.id} tab={active} open={workspaceTool} onOpen={setWorkspaceTool} onClose={() => setWorkspaceTool(null)} />}
+        {!changedEnvironment && activeAgent && <WorkspaceTools key={active.id} tab={active} open={workspaceTool} onOpen={setActiveWorkspaceTool} onClose={() => setActiveWorkspaceTool(null)} onSubmitPrompt={text => terminalHandles.current.get(active.id)?.submitPrompt(text) ?? false} initialReviewFile={reviewFiles.current.get(active.id) ?? ''} onReviewFileChange={path => reviewFiles.current.set(active.id, path)} />}
       </section> : launcherAgent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher agents={config.agents} agent={launcherAgent} cwd={launcherCwd} onAgentChange={selectLauncherAgent} onCwdChange={selectLauncherCwd} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} recentCwds={config.recentCwds} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
     </main>
     {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onRegister={() => { setManaging(false); setRegistering(true); }} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}

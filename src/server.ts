@@ -9,6 +9,7 @@ import { AgentRegistry } from './agents/registry.js';
 import type { AgentAdapter } from './agents/types.js';
 import { AuxiliaryShells, Sessions } from './sessions.js';
 import { gitDiff, gitStatus } from './git.js';
+import { listWorkspaceFiles, readWorkspaceFile } from './files.js';
 import { runRemote } from './ssh.js';
 
 export function equalSecret(actual: string | undefined, expected: string) {
@@ -197,6 +198,16 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     const input = z.object({ path: z.string().min(1).max(4096), kind: z.enum(['staged', 'unstaged', 'untracked']) }).parse(req.query);
     const { tab, agent } = workspaceContext(z.string().uuid().parse(req.params.tabId));
     res.json(await gitDiff(agent, tab.cwd, input.path, input.kind, runCommand));
+  });
+  app.get('/api/workspace/:tabId/files', async (req, res) => {
+    const input = z.object({ path: z.string().max(4096).default(''), query: z.string().max(200).default('') }).parse(req.query);
+    const { tab, agent } = workspaceContext(z.string().uuid().parse(req.params.tabId));
+    res.json(await listWorkspaceFiles(agent, tab.cwd, input.path, input.query, runCommand));
+  });
+  app.get('/api/workspace/:tabId/file', async (req, res) => {
+    const input = z.object({ path: z.string().min(1).max(4096), revision: z.string().max(200).default('') }).parse(req.query);
+    const { tab, agent } = workspaceContext(z.string().uuid().parse(req.params.tabId));
+    res.json(await readWorkspaceFile(agent, tab.cwd, input.path, input.revision, runCommand));
   });
   app.use('/api', (_req, res) => { res.status(404).json({ error: '接口不存在' }); });
   let vite: { close(): Promise<void> } | undefined;

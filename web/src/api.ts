@@ -25,6 +25,9 @@ export type GitChangeKind = 'staged' | 'unstaged' | 'untracked';
 export interface GitChange { path: string; originalPath?: string; status: string; kind: GitChangeKind }
 export interface GitStatus { repository: boolean; changes: GitChange[] }
 export interface GitDiff { path: string; kind: GitChangeKind; diff: string; truncated: boolean }
+export interface WorkspaceFileEntry { name: string; path: string; type: 'file' | 'directory'; hasChildren: boolean }
+export interface WorkspaceFileListing { path: string; entries: WorkspaceFileEntry[]; truncated: boolean; repository: boolean }
+export interface WorkspaceFileContent { path: string; revision: string; size: number; changed: boolean; content?: string }
 export interface Conversation { key: string; title: string; cwd: string; modified: number; session?: Session; history?: HistoryItem }
 export function mergeConversations(agent: Agent, sessions: Session[], history: HistoryItem[], titles: HistoryItem[]): Conversation[] {
   const metadata = new Map(history.map(item => [item.id, item]));

@@ -1,27 +1,36 @@
-import { useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Terminal as XTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { terminalMinimumContrastRatio, terminalTheme } from './theme';
 
-export default function Terminal({ sessionId, active, endpoint = 'terminal', label = 'Agent 终端', processLabel = 'Agent 进程', onExit }: { sessionId: string; active: boolean; endpoint?: 'terminal' | 'shell'; label?: string; processLabel?: string; onExit?(): void }) {
+export interface TerminalHandle { submitPrompt(text: string): boolean }
+
+const Terminal = forwardRef<TerminalHandle, { sessionId: string; active: boolean; endpoint?: 'terminal' | 'shell'; label?: string; processLabel?: string; onExit?(): void }>(function Terminal({ sessionId, active, endpoint = 'terminal', label = 'Agent 终端', processLabel = 'Agent 进程', onExit }, ref) {
   const host = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<XTerminal | null>(null);
   const activeRef = useRef(active);
   const resizeRef = useRef<(() => void) | null>(null);
   const onExitRef = useRef(onExit);
+  const submitRef = useRef<(text: string) => boolean>(() => false);
   activeRef.current = active;
   onExitRef.current = onExit;
   const [state, setState] = useState('连接终端…');
   const [attempt, setAttempt] = useState(0);
   const takeover = useRef(false);
   const autoTakeover = useRef(false);
+  useImperativeHandle(ref, () => ({ submitPrompt: text => submitRef.current(text) }), []);
   useEffect(() => {
     const terminal = new XTerminal({ cursorBlink: true, fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace', fontSize: 13, lineHeight: 1.3, scrollback: 1500, minimumContrastRatio: terminalMinimumContrastRatio, theme: terminalTheme, allowProposedApi: false });
     terminalRef.current = terminal;
     const fit = new FitAddon(); terminal.loadAddon(fit); terminal.open(host.current!);
-    let disposed = false, ready = false, reconnect: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false, ready = false, running = true, reconnect: ReturnType<typeof setTimeout> | undefined;
     let ws: WebSocket;
+    const sendInput = (data: string) => {
+      if (!ready || !running || ws.readyState !== WebSocket.OPEN) return false;
+      for (let offset = 0; offset < data.length; offset += 8000) ws.send(JSON.stringify({ type: 'input', data: data.slice(offset, offset + 8000) }));
+      return true;
+    };
     const resize = () => {
       if (!ready || disposed || !activeRef.current) return;
       const viewportY = terminal.buffer.active.viewportY;
@@ -40,6 +49,7 @@ export default function Terminal({ sessionId, active, endpoint = 'terminal', lab
         if (disposed) return;
         const message = JSON.parse(event.data);
         if (message.type === 'snapshot') {
+          running = message.status !== 'exited';
           terminal.reset(); terminal.resize(message.cols, message.rows);
           terminal.write(message.data, () => {
             if (disposed) return;
@@ -49,7 +59,7 @@ export default function Terminal({ sessionId, active, endpoint = 'terminal', lab
             if (message.status === 'exited') onExitRef.current?.();
           });
         } else if (message.type === 'output') terminal.write(message.data);
-        else if (message.type === 'status') { setState(`${processLabel}已退出 (${message.exitCode ?? '—'})`); onExitRef.current?.(); }
+        else if (message.type === 'status') { running = false; setState(`${processLabel}已退出 (${message.exitCode ?? '—'})`); onExitRef.current?.(); }
       };
       ws.onclose = event => {
         ready = false;
@@ -63,14 +73,17 @@ export default function Terminal({ sessionId, active, endpoint = 'terminal', lab
         setState('连接断开 · 2 秒后重试'); reconnect = setTimeout(connect, 2000);
       };
     };
-    const input = terminal.onData(data => {
-      if (!ready || ws.readyState !== WebSocket.OPEN) return;
-      for (let offset = 0; offset < data.length; offset += 8000) ws.send(JSON.stringify({ type: 'input', data: data.slice(offset, offset + 8000) }));
-    });
+    submitRef.current = text => {
+      if (!text || !ready || !running || ws.readyState !== WebSocket.OPEN) return false;
+      const accepted = sendInput(`\x1b[200~${text}\x1b[201~`);
+      if (accepted) { sendInput('\r'); terminal.focus(); }
+      return accepted;
+    };
+    const input = terminal.onData(data => { sendInput(data); });
     const observer = new ResizeObserver(resize); observer.observe(host.current!);
     connect();
     return () => {
-      disposed = true; terminalRef.current = null; resizeRef.current = null; clearTimeout(reconnect); observer.disconnect(); input.dispose();
+      disposed = true; terminalRef.current = null; resizeRef.current = null; submitRef.current = () => false; clearTimeout(reconnect); observer.disconnect(); input.dispose();
       if (ws.readyState === WebSocket.CONNECTING) ws.onopen = () => ws.close();
       else if (ws.readyState === WebSocket.OPEN) ws.close();
       // xterm 5 leaves snapshot-reset frame callbacks queued. Drain writes and let
@@ -89,4 +102,6 @@ export default function Terminal({ sessionId, active, endpoint = 'terminal', lab
     </div>}
     <div className="terminal-host" ref={host} aria-label={label} />
   </div>;
-}
+});
+
+export default Terminal;

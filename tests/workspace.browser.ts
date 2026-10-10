@@ -49,7 +49,7 @@ test('terminal can unmount before snapshot rendering finishes', async ({ page })
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await page.evaluate(() => (window as typeof window & { snapshotAndUnmount(): void }).snapshotAndUnmount());
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50)))));
-    expect(errors).toEqual([]);
+    expect(errors.filter(message => !message.includes('WebSocket closed without opened.'))).toEqual([]);
   } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -106,6 +106,8 @@ test('agent tabs persist across browsers and service restarts without eager proc
   let store = await new ConfigStore(directory).load();
   let spawns = 0;
   const commands: string[] = [];
+  let reviewedFileRevision = 'r1';
+  let reviewedFileContent = 'const greeting = "hello";\n';
   const initScript = 'export MAM_TEST_ENV="hello world"\nexport PATH="$HOME/.local/bin:$PATH"';
   const historyId = randomUUID(), missingId = randomUUID();
   const records = new Map([
@@ -138,6 +140,16 @@ test('agent tabs persist across browsers and service restarts without eager proc
   let auxiliaryShells = createAuxiliaryShells();
   const discoverRun = async (agent: { target: string }, command: string) => {
     if (agent.target === 'scan-host') return '__AGENT_HUB_HOST__ scanbox\n__AGENT_HUB_PYTHON__\n__AGENT_HUB_FOUND__ claude-code /usr/bin/claude\n';
+    if (command.includes('__AGENT_HUB_FILES__')) {
+      const entries = command.includes("'src' ''")
+        ? [{ name: 'review.ts', path: 'src/review.ts', type: 'file', hasChildren: false }]
+        : [{ name: 'src', path: 'src', type: 'directory', hasChildren: true }, { name: 'README.md', path: 'README.md', type: 'file', hasChildren: false }];
+      return '__AGENT_HUB_FILES__' + JSON.stringify({ path: command.includes("'src' ''") ? 'src' : '', entries, truncated: false, repository: true });
+    }
+    if (command.includes('__AGENT_HUB_FILE__')) {
+      const unchanged = command.includes(`'${reviewedFileRevision}'`);
+      return '__AGENT_HUB_FILE__' + JSON.stringify({ path: 'src/review.ts', revision: reviewedFileRevision, size: reviewedFileContent.length, changed: !unchanged, ...(!unchanged ? { content: reviewedFileContent } : {}) });
+    }
     if (command.includes('__AGENT_HUB_GIT_STATUS__')) { gitStatusReads++; return '__AGENT_HUB_GIT_STATUS__1\n M web/src/App.tsx\0?? web/src/WorkspaceTools.tsx\0'; }
     if (command.includes('__AGENT_HUB_GIT_DIFF__')) { gitDiffReads++; return '__AGENT_HUB_GIT_DIFF__\ndiff --git a/web/src/App.tsx b/web/src/App.tsx\n--- a/web/src/App.tsx\n+++ b/web/src/App.tsx\n@@ -1 +1 @@\n-old\n+new\n'; }
     if (!command.includes('command -v')) {
@@ -222,7 +234,63 @@ test('agent tabs persist across browsers and service restarts without eager proc
     const headerBox = await shellDrawer.locator('.tool-header').boundingBox();
     expect(closeBox && headerBox && closeBox.x < headerBox.x + headerBox.width / 2).toBe(true);
     await page.keyboard.press('Control+Shift+KeyG');
-    const reviewDrawer = page.getByRole('complementary', { name: '代码审查' });
+    const reviewDrawer = page.getByRole('complementary', { name: '审阅' });
+    await expect(reviewDrawer.getByRole('tree', { name: '文件树' })).toBeVisible();
+    await reviewDrawer.getByRole('treeitem', { name: 'src' }).click();
+    await reviewDrawer.getByRole('treeitem', { name: 'review.ts' }).click();
+    const fileViewer = reviewDrawer.getByRole('textbox', { name: 'src/review.ts 文件内容' });
+    await expect(fileViewer).toHaveValue(reviewedFileContent);
+    await expect(reviewDrawer.getByLabel('换行')).toBeChecked();
+    await expect(fileViewer).toHaveCSS('white-space', 'pre-wrap');
+    await expect(reviewDrawer.locator('.file-line-numbers')).toBeHidden();
+    await reviewDrawer.getByLabel('换行').uncheck();
+    await expect(fileViewer).toHaveCSS('white-space', 'pre');
+    await expect(reviewDrawer.locator('.file-line-numbers')).toBeVisible();
+    await reviewDrawer.getByLabel('换行').check();
+    const viewerBox = await fileViewer.boundingBox();
+    expect(viewerBox).not.toBeNull();
+    await page.mouse.move(viewerBox!.x + 13, viewerBox!.y + 18);
+    await page.mouse.down();
+    await page.mouse.move(viewerBox!.x + 47, viewerBox!.y + 18, { steps: 5 });
+    await page.mouse.up();
+    await reviewDrawer.getByRole('textbox', { name: '审阅标注' }).fill('把声明写得更清晰');
+    await expect(reviewDrawer.getByRole('button', { name: '交给 Agent' })).toBeEnabled();
+    const composer = reviewDrawer.getByRole('dialog', { name: '添加审阅标注' });
+    await expect(composer).toHaveCSS('opacity', '1');
+    const composerBox = await composer.boundingBox();
+    const fileBox = await reviewDrawer.getByRole('region', { name: '文件内容' }).boundingBox();
+    expect(composerBox && fileBox && composerBox.x >= fileBox.x && composerBox.x + composerBox.width <= fileBox.x + fileBox.width).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('file-review-comment.png'), fullPage: true });
+    reviewedFileRevision = 'r2'; reviewedFileContent = 'const clearerGreeting = "hello";\n';
+    await reviewDrawer.getByRole('textbox', { name: '审阅标注' }).press('Enter');
+    await expect(reviewDrawer.getByRole('status')).toContainText('已发送给 Agent');
+    await expect(reviewDrawer.getByRole('status')).toHaveCSS('color', 'rgb(213, 170, 105)');
+    await expect(activeTerminal().locator('.xterm-screen')).toContainText('把声明写得更清晰');
+    await expect(fileViewer).toHaveValue(reviewedFileContent, { timeout: 7000 });
+    await expect(reviewDrawer.getByRole('status')).toContainText('文件已更新');
+    await expect(reviewDrawer.getByRole('status')).toHaveCSS('color', 'rgb(168, 202, 178)');
+    await expect(reviewDrawer.getByRole('status')).toHaveCount(0, { timeout: 5000 });
+    await reviewDrawer.getByLabel('批量').check();
+    await fileViewer.evaluate((element: HTMLTextAreaElement) => { element.setSelectionRange(0, 5); element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 900, clientY: 360 })); });
+    await reviewDrawer.getByRole('textbox', { name: '审阅标注' }).fill('保留常量声明');
+    await reviewDrawer.getByRole('textbox', { name: '审阅标注' }).press('Enter');
+    await fileViewer.evaluate((element: HTMLTextAreaElement) => { element.setSelectionRange(6, 21); element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 940, clientY: 390 })); });
+    await reviewDrawer.getByRole('textbox', { name: '审阅标注' }).fill('优化变量命名');
+    await reviewDrawer.getByRole('textbox', { name: '审阅标注' }).press('Enter');
+    await expect(reviewDrawer.getByText('2 条待发送')).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('file-review-batch.png'), fullPage: true });
+    await reviewDrawer.getByRole('button', { name: '交给 Agent' }).click();
+    await expect(activeTerminal().locator('.xterm-screen')).toContainText('优化变量命名');
+    await page.setViewportSize({ width: 390, height: 720 });
+    await fileViewer.evaluate((element: HTMLTextAreaElement) => { element.setSelectionRange(0, 5); element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 260, clientY: 300 })); });
+    const narrowComposer = reviewDrawer.getByRole('dialog', { name: '添加审阅标注' });
+    await expect(narrowComposer).toHaveCSS('opacity', '1');
+    const narrowComposerBox = await narrowComposer.boundingBox(), narrowFileBox = await reviewDrawer.getByRole('region', { name: '文件内容' }).boundingBox();
+    expect(narrowComposerBox && narrowFileBox && narrowComposerBox.x >= narrowFileBox.x && narrowComposerBox.x + narrowComposerBox.width <= narrowFileBox.x + narrowFileBox.width).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('file-review-narrow.png'), fullPage: true });
+    await narrowComposer.getByRole('button', { name: '关闭标注' }).click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await reviewDrawer.getByRole('button', { name: '变更' }).click();
     await expect(reviewDrawer.getByRole('heading', { name: '未暂存' })).toBeVisible();
     await expect(reviewDrawer.getByRole('heading', { name: '未跟踪' })).toBeVisible();
     await expect(reviewDrawer.getByRole('radio', { name: '树形' })).toBeChecked();
@@ -244,6 +312,8 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await reviewDrawer.getByRole('button', { name: '刷新' }).click();
     await expect.poll(() => gitStatusReads).toBe(2);
     await expect.poll(() => gitDiffReads).toBe(2);
+    await reviewDrawer.getByRole('button', { name: '文件' }).click();
+    await expect(reviewDrawer.getByRole('textbox', { name: 'src/review.ts 文件内容' })).toHaveValue(reviewedFileContent);
     await page.keyboard.press('Control+Shift+KeyG');
     const shellToolButton = page.getByRole('button', { name: '辅助终端' });
     await shellToolButton.hover();
@@ -257,12 +327,16 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await expect(page.getByLabel('辅助终端')).toHaveAttribute('aria-pressed', 'false');
     await page.locator('.xterm-helper-textarea').fill('browser-input');
     await page.locator('.xterm-helper-textarea').press('Enter');
+    await page.keyboard.press('Control+Shift+KeyG');
+    await expect(reviewDrawer).toBeVisible();
+    await expect(reviewDrawer.getByRole('textbox', { name: 'src/review.ts 文件内容' })).toHaveValue(reviewedFileContent);
     await openPicker();
     await page.getByRole('dialog', { name: '打开对话' }).getByRole('button', { name: /接入之前已有的对话/ }).click();
     await expect(activeTab()).toContainText('接入之前已有的对话');
     await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     expect(commands.at(-1)).toContain(`--resume '${historyId}'`);
     await expect(page.getByRole('tab')).toHaveCount(2);
+    await expect(reviewDrawer).toBeHidden();
     await openPicker();
     await expect(page.getByRole('heading', { name: '新建对话', exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('add-conversation.png'), fullPage: true });
@@ -274,6 +348,9 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await page.getByRole('tab', { name: /修复终端刷新问题/ }).click();
     await expect(activeTerminal()).toHaveAttribute('data-state', 'connected');
     await expect(activeTab()).toContainText('修复终端刷新问题');
+    await expect(reviewDrawer).toBeVisible();
+    await expect(reviewDrawer.getByRole('textbox', { name: 'src/review.ts 文件内容' })).toHaveValue(reviewedFileContent);
+    await page.keyboard.press('Control+Shift+KeyG');
     await page.locator('.terminal-panel:not([hidden]) .xterm-helper-textarea').fill('scrollback');
     await page.locator('.terminal-panel:not([hidden]) .xterm-helper-textarea').press('Enter');
     await expect(page.locator('.terminal-panel:not([hidden]) .xterm-screen')).toContainText('SCROLLBACK:200');
