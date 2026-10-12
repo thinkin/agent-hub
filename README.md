@@ -29,7 +29,8 @@ npx --yes --registry=https://registry.npmjs.org/ @evanginx/agent-hub@latest star
 
 浏览器会自动打开工作台，已检测到的本地 Agent 自动就位。点击「+」新建对话，选择 Agent，开始你的第一个任务。
 
-需要审阅文件时，打开终端右侧的「审阅」工具（`Ctrl+Shift+G`），从文件树选择文本并圈选内容；Git 未提交变更仍可在同一抽屉的「变更」页查看。
+需要审阅文件时，打开终端右侧的「审阅」工具（`Ctrl+Shift+G`），从文件树选择文本并圈选内容。查看 Git 未提交变更时，点击右侧独立的「变更」按钮。
+手机端的审阅先显示文件列表；打开文件后可用顶部「文件列表」返回，选中文字后点击底部「标注选中内容」填写意见。
 
 可通过 `PORT`（默认 `4317`）和 `CONFIG_DIR`（默认 `~/.agent-hub/`）自定义启动环境；`--port` / `--config-dir` 参数优先。`CONFIG_DIR` 只控制 Agent Hub 自身配置，不改变各 Agent CLI 的配置目录。
 

@@ -13,7 +13,7 @@ const emptyWorkspace: Workspace = { tabs: [], activeTabId: null };
 const emptyHistory: History = { items: [], total: 0, warnings: [] };
 const launcherPreferenceKey = 'agent-hub.launcher.v1';
 interface LauncherPreference { version: 1; agentId: string; cwd: string }
-type WorkspaceTool = 'shell' | 'review' | null;
+type WorkspaceTool = 'shell' | 'review' | 'changes' | null;
 function readLauncherPreference(): LauncherPreference | null {
   try {
     const value = JSON.parse(localStorage.getItem(launcherPreferenceKey) ?? 'null');

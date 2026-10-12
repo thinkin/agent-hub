@@ -145,6 +145,10 @@ test('mobile terminal keys, paste, viewport resize and tab switching preserve se
     await expect(page.getByRole('complementary', { name: '审阅', exact: true })).toBeVisible();
     await noHorizontalOverflow(page);
     await page.getByRole('button', { name: '收起工具抽屉' }).tap();
+    await page.getByRole('button', { name: '变更', exact: true }).tap();
+    await expect(page.getByRole('complementary', { name: '变更', exact: true })).toBeVisible();
+    await noHorizontalOverflow(page);
+    await page.getByRole('button', { name: '收起工具抽屉' }).tap();
     for (const size of [{ width: 320, height: 568 }, { width: 844, height: 390 }]) {
       await page.setViewportSize(size);
       await expect(terminal()).toHaveAttribute('data-state', 'connected');

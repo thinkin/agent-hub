@@ -2,9 +2,8 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { api, type GitChange, type GitChangeKind, type GitDiff, type GitStatus, type Session, type WorkspaceFileContent, type WorkspaceFileEntry, type WorkspaceFileListing, type WorkspaceTab } from './api';
 
 const Terminal = lazy(() => import('./Terminal'));
-type Tool = 'shell' | 'review';
+type Tool = 'shell' | 'review' | 'changes';
 type ChangeView = 'flat' | 'tree';
-type ReviewView = 'files' | 'changes';
 interface ChangeTreeNode { key: string; name: string; path: string; children: ChangeTreeNode[]; change?: GitChange }
 export interface TextSelection { start: number; end: number; startLine: number; startColumn: number; endLine: number; endColumn: number; text: string }
 export interface ReviewAnnotation { selection: TextSelection; comment: string }
@@ -144,6 +143,8 @@ function FileTree({ tabId, selected, onSelect }: { tabId: string; selected: stri
 
 function FileReview({ tab, active, onSubmitPrompt, initialSelectedPath, onSelectedPathChange }: { tab: WorkspaceTab; active: boolean; onSubmitPrompt(text: string): boolean; initialSelectedPath: string; onSelectedPathChange(path: string): void }) {
   const [selectedPath, setSelectedPath] = useState(initialSelectedPath);
+  const [mobile, setMobile] = useState(() => window.matchMedia('(max-width: 650px)').matches);
+  const [fileListOpen, setFileListOpen] = useState(!initialSelectedPath);
   const [file, setFile] = useState<WorkspaceFileContent | null>(null);
   const [selection, setSelection] = useState<TextSelection | null>(null);
   const [composerPosition, setComposerPosition] = useState<{ left: number; top: number } | null>(null);
@@ -153,6 +154,12 @@ function FileReview({ tab, active, onSubmitPrompt, initialSelectedPath, onSelect
   const fileRef = useRef<WorkspaceFileContent | null>(null), fileMain = useRef<HTMLElement>(null), gutter = useRef<HTMLPreElement>(null), viewer = useRef<HTMLTextAreaElement>(null), commentInput = useRef<HTMLTextAreaElement>(null);
   const selecting = useRef(false), selectionPoint = useRef({ x: 0, y: 0 });
   fileRef.current = file;
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 650px)');
+    const update = () => setMobile(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
   const closeComposer = () => { setSelection(null); setComposerPosition(null); setComment(''); };
   const clearDraft = () => { closeComposer(); setAnnotations([]); };
   const hasDraft = !!selection || !!comment.trim() || annotations.length > 0;
@@ -166,9 +173,9 @@ function FileReview({ tab, active, onSubmitPrompt, initialSelectedPath, onSelect
     finally { setLoading(false); }
   }, [tab.id]);
   const chooseFile = (path: string) => {
-    if (path === selectedPath) return;
+    if (path === selectedPath) { setFileListOpen(false); return; }
     if (hasDraft && !confirm('切换文件会清空尚未发送的标注，继续吗？')) return;
-    clearDraft(); setSelectedPath(path); onSelectedPathChange(path); setFile(null); setNotice('');
+    clearDraft(); setSelectedPath(path); setFileListOpen(false); onSelectedPathChange(path); setFile(null); setNotice('');
   };
   useEffect(() => { if (selectedPath && !fileRef.current) void loadFile(selectedPath); }, [selectedPath, loadFile]);
   useEffect(() => {
@@ -176,10 +183,10 @@ function FileReview({ tab, active, onSubmitPrompt, initialSelectedPath, onSelect
     void loadFile(selectedPath, fileRef.current.revision);
   }, [active, selectedPath, loadFile]);
   useEffect(() => {
-    if (!selection) return;
+    if (!selection || !composerPosition) return;
     const frame = requestAnimationFrame(() => commentInput.current?.focus());
     return () => cancelAnimationFrame(frame);
-  }, [selection]);
+  }, [selection, composerPosition]);
   useEffect(() => {
     if (!polling || !selectedPath) return;
     let disposed = false, timer: ReturnType<typeof setTimeout>;
@@ -212,7 +219,7 @@ function FileReview({ tab, active, onSubmitPrompt, initialSelectedPath, onSelect
     const anchorY = clientY && clientY > 0 ? clientY : bounds.top + 42;
     const composerWidth = Math.min(320, Math.max(0, mainBounds.width - 16));
     setError(''); setComment(''); setSelection(next);
-    setComposerPosition({ left: Math.max(8, Math.min(anchorX - mainBounds.left + 12, mainBounds.width - composerWidth - 8)), top: Math.max(8, Math.min(anchorY - mainBounds.top + 10, mainBounds.height - 190)) });
+    setComposerPosition(mobile ? null : { left: Math.max(8, Math.min(anchorX - mainBounds.left + 12, mainBounds.width - composerWidth - 8)), top: Math.max(8, Math.min(anchorY - mainBounds.top + 10, mainBounds.height - 190)) });
   };
   const currentAnnotation = selection && comment.trim() ? { selection, comment: comment.trim() } : null;
   const addAnnotation = () => {
@@ -234,15 +241,17 @@ function FileReview({ tab, active, onSubmitPrompt, initialSelectedPath, onSelect
   };
   const content = file?.content ?? '';
   const lines = Math.max(1, content.split('\n').length);
-  return <div className="review-tool file-review">
-    <header className="tool-header"><div><strong>文件审阅</strong><code>{selectedPath || tab.cwd}</code></div><div className="file-review-actions"><label><input type="checkbox" checked={wrap} onChange={event => { closeComposer(); setWrap(event.target.checked); }} />换行</label><label><input type="checkbox" checked={batch} onChange={toggleBatch} />批量</label>{selectedPath && <button type="button" onClick={() => void loadFile(selectedPath)}>刷新</button>}</div></header>
+  return <div className={`review-tool file-review ${fileListOpen ? 'showing-files' : ''}`}>
+    <header className="tool-header"><div><strong>文件审阅</strong><code>{selectedPath || tab.cwd}</code><button type="button" className="mobile-file-navigation" onClick={() => { closeComposer(); setFileListOpen(value => !value); }} disabled={fileListOpen && !selectedPath}>{fileListOpen ? selectedPath ? '返回内容' : '选择文件' : '文件列表'}</button></div><div className="file-review-actions"><label><input type="checkbox" checked={wrap} onChange={event => { closeComposer(); setWrap(event.target.checked); }} />换行</label><label><input type="checkbox" checked={batch} onChange={toggleBatch} />批量</label>{selectedPath && <button type="button" onClick={() => void loadFile(selectedPath)}>刷新</button>}</div></header>
     {error && <div className="tool-error" role="alert">{error}</div>}
     {notice && <div className={`tool-notice ${notice === '已发送给 Agent' ? 'in-progress' : 'complete'}`} role="status">{notice}{polling ? ' · 等待文件更新' : ''}</div>}
-    <div className="file-review-layout">
+    <div className={`file-review-layout ${fileListOpen ? 'file-list-open' : ''}`}>
       <FileTree tabId={tab.id} selected={selectedPath} onSelect={chooseFile} />
       <section className="file-review-main" aria-label="文件内容" ref={fileMain}>
         {!selectedPath ? <div className="tool-empty"><strong>选择一个文本文件</strong><span>圈选内容、填写标注，然后交给当前 Agent 修改。</span></div> : loading && !file ? <div className="tool-empty">读取文件…</div> : file?.content !== undefined ? <>
-          <div className={`file-code-frame ${wrap ? 'wrap' : ''}`}><pre className="file-line-numbers" aria-hidden="true" ref={gutter}>{Array.from({ length: lines }, (_, index) => index + 1).join('\n')}</pre><textarea ref={viewer} className="file-text-viewer" readOnly spellCheck={false} wrap={wrap ? 'soft' : 'off'} value={content} aria-label={`${selectedPath} 文件内容`} onMouseDown={event => { selecting.current = true; selectionPoint.current = { x: event.clientX, y: event.clientY }; }} onMouseMove={event => { if (selecting.current) selectionPoint.current = { x: event.clientX, y: event.clientY }; }} onMouseUp={event => { selecting.current = false; selectionPoint.current = { x: event.clientX, y: event.clientY }; const target = event.currentTarget; requestAnimationFrame(() => captureSelection(target, selectionPoint.current.x, selectionPoint.current.y)); }} onKeyUp={event => captureSelection(event.currentTarget)} onScroll={event => { if (!wrap && gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop; }} /></div>
+          <div className="mobile-file-path" title={selectedPath}>{selectedPath}</div>
+          <div className={`file-code-frame ${wrap ? 'wrap' : ''}`}><pre className="file-line-numbers" aria-hidden="true" ref={gutter}>{Array.from({ length: lines }, (_, index) => index + 1).join('\n')}</pre><textarea ref={viewer} className="file-text-viewer" readOnly spellCheck={false} wrap={wrap ? 'soft' : 'off'} value={content} aria-label={`${selectedPath} 文件内容`} onMouseDown={event => { selecting.current = true; selectionPoint.current = { x: event.clientX, y: event.clientY }; }} onMouseMove={event => { if (selecting.current) selectionPoint.current = { x: event.clientX, y: event.clientY }; }} onMouseUp={event => { selecting.current = false; selectionPoint.current = { x: event.clientX, y: event.clientY }; const target = event.currentTarget; requestAnimationFrame(() => captureSelection(target, selectionPoint.current.x, selectionPoint.current.y)); }} onSelect={event => { if (mobile && event.currentTarget.selectionStart !== event.currentTarget.selectionEnd) captureSelection(event.currentTarget); }} onKeyUp={event => captureSelection(event.currentTarget)} onScroll={event => { if (!wrap && gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop; }} /></div>
+          {mobile && selection && !composerPosition && <div className="mobile-annotation-action"><button type="button" onClick={() => setComposerPosition({ left: 0, top: 0 })}>标注选中内容</button></div>}
           {selection && composerPosition && <div className="annotation-composer" role="dialog" aria-label="添加审阅标注" style={composerPosition}>
             <div className="annotation-composer-heading"><span>选中内容</span><button type="button" aria-label="关闭标注" onClick={closeComposer}>×</button></div>
             <blockquote>{selection.text.length > 180 ? `${selection.text.slice(0, 180)}…` : selection.text}</blockquote>
@@ -258,10 +267,12 @@ function FileReview({ tab, active, onSubmitPrompt, initialSelectedPath, onSelect
 
 export default function WorkspaceTools({ tab, open, onOpen, onClose, onSubmitPrompt, initialReviewFile, onReviewFileChange }: { tab: WorkspaceTab; open: Tool | null; onOpen(tool: Tool): void; onClose(): void; onSubmitPrompt(text: string): boolean; initialReviewFile: string; onReviewFileChange(path: string): void }) {
   const [shell, setShell] = useState<Session | null>(null), [shellBusy, setShellBusy] = useState(false), [shellError, setShellError] = useState('');
-  const [shellStarted, setShellStarted] = useState(false), [reviewView, setReviewView] = useState<ReviewView>('files');
+  const [shellStarted, setShellStarted] = useState(false);
   const [reviewOpened, setReviewOpened] = useState(open === 'review');
+  const [changesOpened, setChangesOpened] = useState(open === 'changes');
   useEffect(() => { setShell(null); setShellStarted(false); setShellError(''); }, [tab.id]);
   useEffect(() => { if (open === 'review') setReviewOpened(true); }, [open]);
+  useEffect(() => { if (open === 'changes') setChangesOpened(true); }, [open]);
   useEffect(() => {
     if (open !== 'shell' || shell || shellBusy || shellStarted) return;
     setShellStarted(true); setShellBusy(true); setShellError('');
@@ -275,6 +286,7 @@ export default function WorkspaceTools({ tab, open, onOpen, onClose, onSubmitPro
     <div className="tool-rail" role="group" aria-label="工作区工具">
       <button type="button" aria-pressed={open === 'shell'} aria-label="辅助终端" title="辅助终端 · Ctrl+Shift+T" data-tooltip="辅助终端" data-shortcut="Ctrl ⇧ T" onClick={() => open === 'shell' ? onClose() : onOpen('shell')}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 8 4 4-4 4M12.5 16H18" /></svg></button>
       <button type="button" aria-pressed={open === 'review'} aria-label="审阅" title="审阅 · Ctrl+Shift+G" data-tooltip="审阅" data-shortcut="Ctrl ⇧ G" onClick={() => open === 'review' ? onClose() : onOpen('review')}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h10l4 4v12H5zM15 4v5h4M8 13h8M8 16h5" /></svg></button>
+      <button type="button" aria-pressed={open === 'changes'} aria-label="变更" title="Git 变更" data-tooltip="Git 变更" onClick={() => open === 'changes' ? onClose() : onOpen('changes')}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5zM15 3v5h4M8 13h5M10.5 10.5v5M8 18h8" /></svg></button>
     </div>
     {open === 'shell' && <aside className="tool-drawer" aria-label="辅助终端">
       <button type="button" className="tool-close" aria-label="收起工具抽屉" title="收起 · Ctrl+Shift+T" onClick={onClose}>×</button>
@@ -282,9 +294,11 @@ export default function WorkspaceTools({ tab, open, onOpen, onClose, onSubmitPro
     </aside>}
     {reviewOpened && <aside className="tool-drawer review-drawer" aria-label="审阅" hidden={open !== 'review'}>
       <button type="button" className="tool-close" aria-label="收起工具抽屉" title="收起 · Ctrl+Shift+G" onClick={onClose}>×</button>
-      <nav className="review-view-tabs" aria-label="审阅内容"><button type="button" aria-current={reviewView === 'files' ? 'page' : undefined} onClick={() => setReviewView('files')}>文件</button><button type="button" aria-current={reviewView === 'changes' ? 'page' : undefined} onClick={() => setReviewView('changes')}>变更</button></nav>
-      <div className="review-view" hidden={reviewView !== 'files'}><FileReview tab={tab} active={open === 'review' && reviewView === 'files'} onSubmitPrompt={onSubmitPrompt} initialSelectedPath={initialReviewFile} onSelectedPathChange={onReviewFileChange} /></div>
-      {reviewView === 'changes' && <GitReview tab={tab} />}
+      <FileReview tab={tab} active={open === 'review'} onSubmitPrompt={onSubmitPrompt} initialSelectedPath={initialReviewFile} onSelectedPathChange={onReviewFileChange} />
+    </aside>}
+    {changesOpened && <aside className="tool-drawer" aria-label="变更" hidden={open !== 'changes'}>
+      <button type="button" className="tool-close" aria-label="收起工具抽屉" title="收起变更" onClick={onClose}>×</button>
+      <GitReview tab={tab} />
     </aside>}
   </div>;
 }

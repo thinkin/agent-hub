@@ -86,13 +86,14 @@ h1, h2, p { margin-top: 0; }
 .empty-workspace .subtle { max-width: 440px; }
 .prompt-symbol { font-size: 26px; color: #676771; margin-bottom: 24px; }
 .active-workspace { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.workspace-tools { position: absolute; inset: 0 0 0 auto; z-index: 3; width: 34px; pointer-events: none; }
+.workspace-tools { position: absolute; inset: 0 0 0 auto; z-index: 3; width: 40px; pointer-events: none; }
 .workspace-tools.open { width: min(75vw, calc(100vw - 48px)); min-width: min(520px, calc(100vw - 48px)); }
 .tool-rail { position: absolute; top: 50%; right: 0; z-index: 2; display: flex; flex-direction: column; gap: 4px; transform: translateY(-50%); pointer-events: auto; }
-.tool-rail button { position: relative; width: 36px; height: 42px; padding: 0; display: grid; place-items: center; border-radius: 5px 0 0 5px; border-right: 0; background: color-mix(in srgb, var(--surface) 94%, transparent); color: var(--muted); box-shadow: -5px 0 16px #0002; transition: width 140ms ease, color 140ms ease, background 140ms ease, border-color 140ms ease, transform 140ms ease; }
+.tool-rail button { position: relative; width: 40px; height: 42px; padding: 0; display: grid; place-items: center; border-radius: 5px 0 0 5px; border-right: 0; background: color-mix(in srgb, var(--surface) 94%, transparent); color: var(--muted); box-shadow: -5px 0 16px #0002; transition: color 140ms ease, background 140ms ease, border-color 140ms ease; }
 .tool-rail button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; transition: transform 140ms ease; }
 .tool-rail button::after { content: attr(data-tooltip) "  ·  " attr(data-shortcut); position: absolute; right: calc(100% + 9px); top: 50%; width: max-content; max-width: 190px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--raised); color: var(--strong); box-shadow: 0 7px 24px #0005; font: 10px/1.2 "SFMono-Regular", Consolas, monospace; white-space: nowrap; opacity: 0; pointer-events: none; transform: translate(5px, -50%); transition: opacity 120ms ease, transform 120ms ease; }
-.tool-rail button:hover, .tool-rail button:focus-visible { width: 40px; color: var(--strong); background: var(--hover); border-color: color-mix(in srgb, var(--muted) 55%, var(--border)); transform: translateX(-2px); }
+.tool-rail button:not([data-shortcut])::after { content: attr(data-tooltip); }
+.tool-rail button:hover, .tool-rail button:focus-visible { color: var(--strong); background: var(--hover); border-color: color-mix(in srgb, var(--muted) 55%, var(--border)); }
 .tool-rail button:focus-visible { outline: 1px solid color-mix(in srgb, var(--muted) 68%, var(--border)); outline-offset: -1px; }
 .tool-rail button:hover svg, .tool-rail button:focus-visible svg { transform: translateX(-1px); }
 .tool-rail button:hover::after, .tool-rail button:focus-visible::after { opacity: 1; transform: translate(0, -50%); }
@@ -141,19 +142,14 @@ h1, h2, p { margin-top: 0; }
 .diff-view .diff-meta { color: var(--muted); }
 .diff-truncated { flex-shrink: 0; padding: 7px 12px; border-top: 1px solid var(--border); color: var(--warning); font-size: 10px; }
 .review-drawer { background: var(--surface); }
-.review-view-tabs { height: 44px; flex-shrink: 0; display: flex; align-items: end; gap: 2px; padding: 7px 48px 0; border-bottom: 1px solid var(--border); background: var(--surface); }
-.review-view-tabs button { height: 30px; min-width: 62px; padding: 0 12px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--muted); font-size: 11px; }
-.review-view-tabs button:hover { color: var(--strong); background: var(--subtle-hover); }
-.review-view-tabs button[aria-current="page"] { color: var(--strong); border-bottom-color: var(--accent); background: transparent; }
-.review-view { flex: 1; min-height: 0; display: flex; }
-.review-view[hidden] { display: none; }
-.git-review .tool-header, .file-review .tool-header { height: 40px; padding-left: 14px; }
+.git-review .tool-header, .file-review .tool-header { height: 46px; padding-left: 48px; }
 .tool-notice { flex-shrink: 0; padding: 7px 14px; border-bottom: 1px solid; font-size: 10px; }
 .tool-notice.in-progress { border-color: #5a4930; background: #2a2419; color: #d5aa69; }
 .tool-notice.complete { border-color: #3d4d43; background: #1d2721; color: #a8cab2; }
 .file-review-actions { flex-shrink: 0; display: flex !important; align-items: center !important; gap: 10px !important; }
 .file-review-actions label { flex-direction: row; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; cursor: pointer; }
 .file-review-actions input { width: 13px; height: 13px; margin: 0; padding: 0; accent-color: var(--accent); }
+.mobile-file-navigation, .mobile-file-path, .mobile-annotation-action { display: none; }
 .file-review-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(190px, 25%) minmax(0, 1fr); background: var(--background); }
 .workspace-file-sidebar { min-width: 0; min-height: 0; display: flex; flex-direction: column; border-right: 1px solid var(--border); background: var(--surface); }
 .workspace-file-sidebar > input { flex-shrink: 0; height: 31px; margin: 7px 8px; width: calc(100% - 16px); padding: 5px 8px; border-color: var(--border); background: var(--background); font-size: 10px; }
@@ -359,8 +355,31 @@ dialog summary { color: var(--muted); font-size: 12px; margin: 8px 0 18px; curso
   .tool-header { padding-right: 8px; gap: 8px; }
   .tool-header button { min-height: 40px; }
   .tool-header code { display: none; }
-  .review-layout, .file-review-layout { grid-template-columns: minmax(95px, 34%) minmax(0, 1fr); }
-  .review-view-tabs { padding-left: 44px; }
+  .review-layout { grid-template-columns: minmax(95px, 34%) minmax(0, 1fr); }
+  .file-review-layout { display: block; position: relative; }
+  .file-review-layout .workspace-file-sidebar, .file-review-layout .file-review-main { width: 100%; height: 100%; }
+  .file-review-layout:not(.file-list-open) .workspace-file-sidebar, .file-review-layout.file-list-open .file-review-main { display: none; }
+  .file-review .tool-header strong { display: none; }
+  .file-review .tool-header { gap: 4px; }
+  .file-review-actions { gap: 4px !important; }
+  .file-review-actions label { gap: 2px; }
+  .file-review-actions button { padding-inline: 5px; }
+  .file-review.showing-files .file-review-actions { display: none !important; }
+  .mobile-file-navigation { display: block; min-height: 40px; white-space: nowrap; }
+  .file-review-layout.file-list-open .workspace-file-sidebar > input { height: 44px; margin: 8px; width: calc(100% - 16px); }
+  .file-review-layout.file-list-open .workspace-file-row { min-height: 44px; font-size: 12px; }
+  .mobile-file-path { display: block; flex-shrink: 0; padding: 8px 12px; overflow: hidden; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+  .file-review-main .file-code-frame { min-height: 0; }
+  .file-review-main textarea.file-text-viewer { font-size: 12px; line-height: 1.6; }
+  .mobile-annotation-action { display: flex; flex-shrink: 0; padding: 8px 10px; border-top: 1px solid var(--border); background: var(--surface); }
+  .mobile-annotation-action button { width: 100%; min-height: 44px; color: var(--strong); }
+  .file-review-main .annotation-composer { position: absolute; top: auto !important; bottom: 0; left: 0 !important; right: 0; width: 100%; max-height: min(60%, 360px); overflow: auto; border-radius: 8px 8px 0 0; padding: 12px; }
+  .file-review-main .annotation-composer-heading { height: 36px; font-size: 12px; }
+  .file-review-main .annotation-composer-heading button { width: 36px; height: 36px; }
+  .file-review-main .annotation-composer blockquote { font-size: 11px; }
+  .file-review-main .annotation-composer > textarea { min-height: 88px; font-size: 16px; }
+  .file-review-main .annotation-composer-actions span { display: none; }
+  .file-review-main .annotation-composer-actions button { margin-left: auto; min-height: 44px; font-size: 12px; }
   .workspace-file-sidebar > input { margin-inline: 5px; width: calc(100% - 10px); font-size: 16px; }
   .file-line-numbers { min-width: 30px; padding-inline: 4px; }
   .annotation-rail { right: 6px; width: min(250px, calc(100% - 12px)); }
