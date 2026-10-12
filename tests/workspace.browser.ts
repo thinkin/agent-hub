@@ -78,8 +78,8 @@ test('restored overflow tab stays visible when earlier titles arrive', async ({ 
   };
   try {
     await page.goto(`${origin}/#token=${app.token}`);
-    for (const width of [1440, 390]) {
-      if (width === 390) {
+    for (const width of [1440, 760]) {
+      if (width === 760) {
         titlesReady = holdTitles();
         await page.setViewportSize({ width, height: 720 });
         await page.reload();
@@ -431,11 +431,11 @@ test('agent tabs persist across browsers and service restarts without eager proc
     expect(spawns).toBe(2);
     await page.setViewportSize({ width: 390, height: 720 });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await expect(page.getByRole('button', { name: '添加对话', exact: true })).toBeInViewport();
-    await page.getByRole('tab').last().evaluate((element: HTMLElement) => element.click());
-    await expect(page.getByRole('tab').last()).toHaveAttribute('aria-selected', 'true');
-    const activeTabBox = await activeTab().boundingBox(), tabbarBox = await page.locator('.tabs').boundingBox();
-    expect(activeTabBox && tabbarBox && activeTabBox.x >= tabbarBox.x && activeTabBox.x + activeTabBox.width <= tabbarBox.x + tabbarBox.width).toBe(true);
+    await expect(page.locator('.tabbar')).toBeHidden();
+    await page.getByRole('button', { name: '会话', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '会话', exact: true })).toBeVisible();
+    await page.locator('.mobile-conversation-row > button:first-child').last().click();
+    await expect.poll(() => store.get().workspace.activeTabId).toBe(savedWorkspace.tabs.at(-1)!.id);
     await page.screenshot({ path: testInfo.outputPath('narrow.png'), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 980 });
     await openPicker();

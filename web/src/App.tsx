@@ -322,6 +322,9 @@ export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]), [titles, setTitles] = useState<Record<string, HistoryItem[]>>({});
   const [ready, setReady] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState(''), [titleError, setTitleError] = useState('');
   const [modal, setModal] = useState<Agent | undefined>(undefined), [managing, setManaging] = useState(false), [registering, setRegistering] = useState(false);
+  const [mobileConversations, setMobileConversations] = useState(false);
+  const mobileDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => { if (mobileConversations) mobileDialog.current?.showModal(); }, [mobileConversations]);
   const [dialog, setDialog] = useState<'open' | null>(null);
   const [launcherPreference, setLauncherPreference] = useState<LauncherPreference | null>(readLauncherPreference);
   const [workspaceTools, setWorkspaceTools] = useState<Record<string, WorkspaceTool>>({});
@@ -372,6 +375,7 @@ export default function App() {
   useEffect(() => {
     if (!active || !activeAgent || changedEnvironment) return;
     const shortcut = (event: KeyboardEvent) => {
+      if (document.querySelector('.terminal-control-dialog[open]')) return;
       if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey || event.repeat) return;
       const tool = event.key.toLowerCase() === 't' ? 'shell' : event.key.toLowerCase() === 'g' ? 'review' : null;
       if (!tool) return;
@@ -491,6 +495,11 @@ export default function App() {
     if (next !== undefined) { event.preventDefault(); act(selectTab(tabs[next].id)); focusTab(tabs[next].id); }
   };
   const openPicker = (agentId?: string) => { const agent = agentId ? config.agents.find(item => item.id === agentId) : undefined; if (agent) rememberLauncher(agent); setDialog('open'); };
+  const closeTab = (id: string) => {
+    reviewFiles.current.delete(id);
+    setWorkspaceTools(previous => { const next = { ...previous }; delete next[id]; return next; });
+    act(changeWorkspace({ action: 'close', tabId: id }));
+  };
   return <div className="workspace">
     <a className="skip-link" href="#main">跳到终端区域</a>
     <header className="appbar">
@@ -510,13 +519,14 @@ export default function App() {
           const status = session?.status === 'running' ? '活跃' : session ? '已退出' : '待恢复';
           return <div className={`tab ${selected ? 'selected' : ''}`} key={tab.id}>
             <button role="tab" id={`tab-${tab.id}`} aria-selected={selected} aria-controls="terminal-panel" tabIndex={selected || (!active && tabs[0]?.id === tab.id) ? 0 : -1} onClick={() => act(selectTab(tab.id))} title={`${titleFor(tab)}\n${tab.cwd}\n${status}`} onKeyDown={event => moveFocus(event, tab.id)}>{group.agent && <AgentIcon type={group.agent.type} size={14} labelled={false} />}<span className={`state-icon ${session?.status === 'running' ? 'running' : ''}`} title={status} aria-hidden="true" /><span className="tab-title">{titleFor(tab)}</span><span className="sr-only">{status}</span></button>
-            <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，Agent 会话继续运行，辅助终端将结束" onClick={() => { reviewFiles.current.delete(tab.id); setWorkspaceTools(previous => { if (!(tab.id in previous)) return previous; const next = { ...previous }; delete next[tab.id]; return next; }); act(changeWorkspace({ action: 'close', tabId: tab.id })); }}>×</button>
+            <button className="tab-close" aria-label={`关闭 ${titleFor(tab)}`} title="关闭 tab，Agent 会话继续运行，辅助终端将结束" onClick={() => { closeTab(tab.id); }}>×</button>
           </div>;
         })}</div>
       ))}</div>
       {tabs.length > 0 && <div className="tab-actions"><button aria-label="添加对话" title="新建或打开对话" disabled={!config.agents.length || busy || tabs.length >= 20} onClick={() => openPicker()}>+</button></div>}
     </div>
     <main id="main" className="main" tabIndex={-1}>
+      <button className={`mobile-conversation-entry${active ? ' has-terminal' : ''}`} aria-label="会话" title="会话" aria-haspopup="dialog" aria-expanded={mobileConversations} onClick={() => setMobileConversations(true)}><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.3-1.6.9L5 5.6 2.5 9.9l1.7 1.7v1.8l-1.7 1.7L5 19.4l2.3-.6 1.6.9.6 2.3h5l.6-2.3 1.6-.9 2.3.6 2.5-4.3-1.7-1.7v-1.8l1.7-1.7L19 5.6l-2.3.6-1.6-.9-.6-2.3Z" /><circle cx="12" cy="12.5" r="3" /></svg></button>
       {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
       {titleError && <p className="sync-warning">{titleError}</p>}
       {active ? <section className="active-workspace" id="terminal-panel" role="tabpanel" aria-labelledby={`tab-${active.id}`}>
@@ -527,6 +537,19 @@ export default function App() {
     </main>
     {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onRegister={() => { setManaging(false); setRegistering(true); }} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}
     {registering && <AgentRegister agents={config.agents} onClose={() => setRegistering(false)} onDone={next => { setRegistering(false); act(api<Config>('/config').then(data => { setConfig(data); setWorkspace(next); })); }} onSaved={saved => { setRegistering(false); rememberLauncher(saved); act(api<Config>('/config').then(data => setConfig(data))); }} />}
+    {mobileConversations && <dialog ref={mobileDialog} className="mobile-conversation-dialog" aria-label="会话" onCancel={() => setMobileConversations(false)}>
+      <div className="dialog-heading"><h2>会话</h2><button aria-label="关闭" onClick={() => setMobileConversations(false)}>×</button></div>
+      <div className="mobile-conversation-list">{tabs.map(tab => {
+        const agent = agentOf(tab), session = agent && tabSession(tab, agent, sessions);
+        return <div className="mobile-conversation-row" key={tab.id}>
+          <button aria-label={`切换到 ${titleFor(tab)}`} aria-current={active?.id === tab.id ? 'true' : undefined} onClick={() => { setMobileConversations(false); act(selectTab(tab.id)); }}>
+            <strong>{titleFor(tab)}{active?.id === tab.id && ' · 当前'}</strong><small>{agent?.name} · {session?.status === 'running' ? '活跃' : session ? '已退出' : '待恢复'}</small><code>{tab.cwd}</code>
+          </button>
+          <button aria-label={`关闭 ${titleFor(tab)}`} title="移除工作区，会话继续运行" onClick={() => closeTab(tab.id)}>×</button>
+        </div>;
+      })}{!tabs.length && <p className="subtle">还没有打开的会话</p>}</div>
+      <div className="dialog-actions"><button className="primary" disabled={!config.agents.length || busy || tabs.length >= 20} onClick={() => { setMobileConversations(false); openPicker(); }}>新建或打开对话</button></div>
+    </dialog>}
     {modal !== undefined && <AgentForm agent={modal} onClose={() => setModal(undefined)} onSaved={saved => { setModal(undefined); rememberLauncher(saved); act(api<Config>('/config').then(data => setConfig(data))); }} />}
     {dialog === 'open' && launcherAgent && <ConversationPicker key={launcherAgent.id} agents={config.agents} agent={launcherAgent} cwd={launcherCwd} onAgentChange={selectLauncherAgent} onCwdChange={selectLauncherCwd} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} recentCwds={config.recentCwds} onClose={() => setDialog(null)} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} />}
   </div>;

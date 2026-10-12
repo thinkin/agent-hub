@@ -1,6 +1,6 @@
 import express from 'express';
 import { createServer } from 'node:http';
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { z, ZodError } from 'zod';
@@ -12,10 +12,10 @@ import { gitDiff, gitStatus } from './git.js';
 import { listWorkspaceFiles, readWorkspaceFile } from './files.js';
 import { runRemote } from './ssh.js';
 
-export function equalSecret(actual: string | undefined, expected: string) {
-  return !!actual && Buffer.byteLength(actual) === Buffer.byteLength(expected) && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
-}
-export async function createApp(options: { store: ConfigStore; sessions?: Sessions; auxiliaryShells?: AuxiliaryShells; registry?: AgentRegistry; runCommand?: (agent: Agent, command: string, input?: string, signal?: AbortSignal) => Promise<string>; dev?: boolean }) {
+import { equalSecret } from './auth.js';
+export { equalSecret } from './auth.js';
+
+export async function createApp(options: { store: ConfigStore; sessions?: Sessions; auxiliaryShells?: AuxiliaryShells; registry?: AgentRegistry; remoteOrigin?: string; runCommand?: (agent: Agent, command: string, input?: string, signal?: AbortSignal) => Promise<string>; dev?: boolean }) {
   const { store } = options;
   const registry = options.registry ?? new AgentRegistry();
   const sessions = options.sessions ?? new Sessions(undefined, registry);
@@ -38,6 +38,10 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
   const server = createServer(app);
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
   let origin = '';
+  const remoteWebSocketOrigin = options.remoteOrigin ? new URL(options.remoteOrigin).origin.replace(/^http/, 'ws') : '';
+  function trustedOrigin(host: string | undefined, requestOrigin?: string) {
+    return [origin, options.remoteOrigin].some(value => value && host === new URL(value).host && (!requestOrigin || requestOrigin === value));
+  }
   function authenticated(cookies = '') {
     const value = cookies.split(';').map(x => x.trim()).find(x => x.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1);
     return equalSecret(value, cookie);
@@ -47,15 +51,15 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:*; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'");
-    if (req.headers.host !== new URL(origin).host || (req.headers.origin && req.headers.origin !== origin)) { res.status(403).json({ error: '请求来源不被允许' }); return; }
-    if (!['GET', 'HEAD'].includes(req.method) && req.headers.origin !== origin) { res.status(403).json({ error: '缺少可信来源' }); return; }
+    res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ${remoteWebSocketOrigin}; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'`);
+    if (!trustedOrigin(req.headers.host, req.headers.origin)) { res.status(403).json({ error: '请求来源不被允许' }); return; }
+    if (!['GET', 'HEAD'].includes(req.method) && (!req.headers.origin || !trustedOrigin(req.headers.host, req.headers.origin))) { res.status(403).json({ error: '缺少可信来源' }); return; }
     next();
   });
   app.use(express.json({ limit: '32kb' }));
   app.post('/api/auth', (req, res) => {
     if (typeof req.body?.token !== 'string' || !equalSecret(req.body.token, token)) { res.status(401).json({ error: '访问令牌无效，请使用 CLI 输出的链接' }); return; }
-    res.setHeader('Set-Cookie', `${cookieName}=${cookie}; HttpOnly; SameSite=Strict; Path=/`);
+    res.setHeader('Set-Cookie', `${cookieName}=${cookie}; HttpOnly; SameSite=Strict; Path=/${req.headers.origin?.startsWith('https:') ? '; Secure' : ''}`);
     res.json({ ok: true });
   });
   app.use('/api', (req, res, next) => {
@@ -224,7 +228,7 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     res.status(error instanceof ZodError || error instanceof SyntaxError ? 400 : 500).json({ error: error instanceof ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : error.message });
   });
   server.on('upgrade', (req, socket, head) => {
-    if (req.headers.host !== new URL(origin).host || req.headers.origin !== origin || !authenticated(req.headers.cookie)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
+    if (!req.headers.origin || !trustedOrigin(req.headers.host, req.headers.origin) || !authenticated(req.headers.cookie)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }
     const url = new URL(req.url!, origin);
     const match = /^\/(terminal|shell)\/([a-f0-9-]+)$/.exec(url.pathname);
     const session = match && (match[1] === 'terminal' ? sessions.get(match[2]) : auxiliaryShells.get(match[2]));
