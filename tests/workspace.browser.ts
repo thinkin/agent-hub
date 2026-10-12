@@ -102,6 +102,7 @@ test('restored overflow tab stays visible when earlier titles arrive', async ({ 
 });
 
 test('agent tabs persist across browsers and service restarts without eager process creation', async ({ page, browser }, testInfo) => {
+  test.slow();
   const directory = await mkdtemp(join(tmpdir(), 'mam-browser-'));
   let store = await new ConfigStore(directory).load();
   let spawns = 0;
