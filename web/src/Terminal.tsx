@@ -44,10 +44,12 @@ const Terminal = forwardRef<TerminalHandle, { sessionId: string; active: boolean
     const syncScrollbar = () => {
       scrollFrame = 0;
       const buffer = terminal.buffer.active, height = rail.clientHeight;
-      const thumbHeight = Math.min(height, Math.max(52, height * terminal.rows / (buffer.baseY + terminal.rows)));
+      const cap = height * 0.4;
+      const thumbHeight = Math.max(Math.min(52, cap), Math.min(cap, height * terminal.rows / (buffer.baseY + terminal.rows)));
       thumb.style.height = `${thumbHeight}px`;
       thumb.style.transform = `translateY(${buffer.baseY ? (height - thumbHeight) * buffer.viewportY / buffer.baseY : 0}px)`;
-      thumb.hidden = buffer.baseY === 0;
+      thumb.hidden = false;
+      thumb.toggleAttribute('data-idle', buffer.baseY === 0);
       rail.setAttribute('aria-valuemax', String(buffer.baseY));
       rail.setAttribute('aria-valuenow', String(buffer.viewportY));
       rail.setAttribute('aria-disabled', String(buffer.baseY === 0));
@@ -160,7 +162,7 @@ const Terminal = forwardRef<TerminalHandle, { sessionId: string; active: boolean
     </dialog>
     {state !== '已连接' && !controlBlocked && <div className="terminal-status"><span className="muted-dot" />{state}</div>}
     <div className="terminal-viewport-layout">
-      <div className="terminal-scroll-rail" ref={scrollRail} role="scrollbar" aria-label="终端历史滚动" aria-controls={viewportId} aria-orientation="vertical" aria-valuemin={0} aria-valuemax={0} aria-valuenow={0} tabIndex={0}><div className="terminal-scroll-thumb" ref={scrollThumb} hidden /></div>
+      <div className="terminal-scroll-rail" ref={scrollRail} role="scrollbar" aria-label="终端历史滚动" aria-controls={viewportId} aria-orientation="vertical" aria-valuemin={0} aria-valuemax={0} aria-valuenow={0} tabIndex={0}><div className="terminal-scroll-thumb" ref={scrollThumb} data-idle /></div>
       <div className="terminal-host" id={viewportId} ref={host} aria-label={label} />
     </div>
     {pasteOpen && <form className="mobile-paste" id={pasteId} onSubmit={event => {

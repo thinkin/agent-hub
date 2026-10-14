@@ -427,8 +427,8 @@ dialog::backdrop { background: var(--backdrop); }
   .workspace, .workspace:has(.tabs:empty) { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .workspace > .appbar, .workspace > .tabbar { display: none; }
   .terminal-scroll-rail { display: block; position: absolute; top: 6px; bottom: 6px; left: 0; width: 28px; z-index: 2; pointer-events: none; touch-action: none; user-select: none; }
-  .terminal-scroll-thumb { position: absolute; top: 0; left: 4px; right: 4px; border-radius: 8px; background: var(--scrollbar); border: 1px solid var(--muted); pointer-events: auto; cursor: ns-resize; }
-  .terminal-scroll-thumb[hidden] { display: none; }
+  .terminal-scroll-thumb { position: absolute; top: 0; left: 4px; right: 4px; border-radius: 8px; background: var(--scrollbar); border: 1px solid var(--muted); pointer-events: auto; touch-action: none; cursor: ns-resize; }
+  .terminal-scroll-thumb[data-idle] { opacity: .35; cursor: default; }
   .terminal-scroll-rail:focus-visible { outline: none; }
   .terminal-scroll-rail:focus-visible .terminal-scroll-thumb { outline: 1px solid var(--accent); outline-offset: 1px; }
   .terminal-scroll-rail:active .terminal-scroll-thumb { background: var(--muted); }
