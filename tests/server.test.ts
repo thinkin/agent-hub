@@ -270,3 +270,29 @@ test('recent working directories are recorded per-host as an LRU capped at 20', 
     assert.deepEqual((await new ConfigStore(directory).load()).get().recentCwds, await recent());
   } finally { for (const session of sessions.list()) sessions.get(session.id)?.dispose(); await app.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test('global notes persist separately and reject stale edits and unauthenticated requests', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-hub-notes-api-'));
+  const store = await new ConfigStore(directory).load();
+  const app = await createApp({ store });
+  const origin = await app.listen(0);
+  try {
+    assert.equal((await fetch(`${origin}/api/notes`)).status, 401);
+    const auth = await fetch(`${origin}/api/auth`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ token: app.token }) });
+    const cookie = auth.headers.get('set-cookie')!.split(';')[0];
+    const request = (path: string, method = 'GET', body?: unknown) => fetch(`${origin}/api/notes${path}`, { method, headers: { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+    assert.deepEqual(await (await request('')).json(), []);
+    const note = await (await request('', 'POST', {})).json() as { id: string; version: number };
+    const updated = await (await request(`/${note.id}`, 'PUT', { title: '合成便签', content: '第一行\n第二行', version: note.version })).json() as { version: number };
+    assert.equal(updated.version, 2);
+    assert.equal((await request(`/${note.id}`, 'PUT', { title: 'stale', content: '', version: 1 })).status, 409);
+    assert.equal((await request(`/${note.id}`, 'DELETE', { version: 1 })).status, 409);
+    assert.equal((await request(`/${note.id}`, 'PUT', { title: '', content: 'x'.repeat(8001), version: 2 })).status, 400);
+    assert.equal((await stat(join(directory, 'notes.json'))).mode & 0o777, 0o600);
+    const { NotesStore } = await import('../src/notes.js');
+    assert.equal((await new NotesStore(directory).list())[0].content, '第一行\n第二行');
+    assert.equal(JSON.stringify(store.get()).includes('合成便签'), false);
+    assert.equal((await request(`/${note.id}`, 'DELETE', { version: 2 })).status, 200);
+    assert.deepEqual(await (await request('')).json(), []);
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});

@@ -207,7 +207,7 @@ async function verifyControlConflict(page: Page, testInfo: TestInfo) {
     await page.keyboard.press('Control+Shift+G');
     await expect(page.locator('.tool-rail button[aria-label="审阅"]')).toHaveAttribute('aria-pressed', 'false');
     const mobile = page.viewportSize()!.width < 650;
-    const entry = mobile ? page.locator('.mobile-conversation-entry') : page.locator('.manage-button');
+    const entry = mobile ? page.locator('.mobile-conversation-entry') : page.getByRole('button', { name: '管理 Agents', exact: true });
     const entryBox = (await entry.boundingBox())!;
     await page.mouse.click(entryBox.x + entryBox.width / 2, entryBox.y + entryBox.height / 2);
     await expect(page.getByRole('dialog', { name: mobile ? '会话' : '管理 Agents', exact: true })).not.toBeVisible();

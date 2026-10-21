@@ -11,12 +11,14 @@ import { AuxiliaryShells, Sessions } from './sessions.js';
 import { gitDiff, gitStatus } from './git.js';
 import { listWorkspaceFiles, readWorkspaceFile } from './files.js';
 import { runRemote } from './ssh.js';
+import { NotesStore, NoteError, noteInput } from './notes.js';
 
 import { equalSecret } from './auth.js';
 export { equalSecret } from './auth.js';
 
 export async function createApp(options: { store: ConfigStore; sessions?: Sessions; auxiliaryShells?: AuxiliaryShells; registry?: AgentRegistry; remoteOrigin?: string; runCommand?: (agent: Agent, command: string, input?: string, signal?: AbortSignal) => Promise<string>; dev?: boolean }) {
   const { store } = options;
+  const notes = new NotesStore(store.directory);
   const registry = options.registry ?? new AgentRegistry();
   const sessions = options.sessions ?? new Sessions(undefined, registry);
   const auxiliaryShells = options.auxiliaryShells ?? new AuxiliaryShells();
@@ -67,6 +69,18 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     next();
   });
   app.get('/api/config', (_req, res) => { const config = store.get(); res.json({ ...config, agents: config.agents.map(agent => ({ ...agent, initScriptKey: initScriptKey(agent) })) }); });
+  app.get('/api/notes', async (_req, res) => { res.json(await notes.list()); });
+  app.post('/api/notes', async (req, res) => { z.object({}).strict().parse(req.body); res.status(201).json(await notes.create()); });
+  app.put('/api/notes/:id', async (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const { version, ...input } = noteInput.extend({ version: z.number().int().positive() }).parse(req.body);
+    res.json(await notes.update(id, input, version));
+  });
+  app.delete('/api/notes/:id', async (req, res) => {
+    const id = z.string().uuid().parse(req.params.id);
+    const { version } = z.object({ version: z.number().int().positive() }).strict().parse(req.body);
+    await notes.remove(id, version); res.json({ ok: true });
+  });
   app.get('/api/workspace', (_req, res) => res.json(store.get().workspace));
   app.patch('/api/workspace', async (req, res) => {
     const input = z.discriminatedUnion('action', [
@@ -225,7 +239,7 @@ export async function createApp(options: { store: ConfigStore; sessions?: Sessio
     app.get('/', (_req, res) => res.sendFile(`${root}/index.html`));
   }
   app.use((error: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    res.status(error instanceof ZodError || error instanceof SyntaxError ? 400 : 500).json({ error: error instanceof ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : error.message });
+    res.status(error instanceof NoteError ? error.status : error instanceof ZodError || error instanceof SyntaxError ? 400 : 500).json({ error: error instanceof ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : error.message });
   });
   server.on('upgrade', (req, socket, head) => {
     if (!req.headers.origin || !trustedOrigin(req.headers.host, req.headers.origin) || !authenticated(req.headers.cookie)) { socket.write('HTTP/1.1 403 Forbidden\r\n\r\n'); socket.destroy(); return; }

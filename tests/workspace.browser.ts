@@ -541,3 +541,71 @@ test('agent tabs persist across browsers and service restarts without eager proc
     await freshContext.close();
   } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
 });
+
+test('compact quadrant notes randomize color, reorder, move and persist', async ({ page }, testInfo) => {
+  const directory = await mkdtemp(join(tmpdir(), 'agent-hub-quadrant-notes-'));
+  const store = await new ConfigStore(directory).load();
+  const app = await createApp({ store, dev: true });
+  const origin = await app.listen(0);
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  try {
+    await page.goto(`${origin}/#token=${app.token}`);
+    await page.getByRole('button', { name: '便签管理', exact: true }).click();
+    const board = page.getByRole('dialog', { name: '便签管理' });
+    for (const label of ['紧急不重要', '重要且紧急', '不紧急不重要', '重要不紧急']) await expect(board.getByRole('region', { name: label, exact: true })).toBeVisible();
+    await expect(board).not.toContainText('还没有便签');
+    const labels = ['紧急不重要', '重要且紧急', '不紧急不重要', '重要不紧急'];
+    for (const [index, content] of ['第一条', '第二条', '第三条', '第四条', '第五条'].entries()) {
+      const label = labels[index % labels.length];
+      await board.getByRole('button', { name: `在${label}中新建便签`, exact: true }).click();
+      await expect(board.locator('textarea:focus')).toBeVisible();
+      await board.locator('textarea:focus').fill(content);
+      await expect(board.getByRole('status')).toHaveText('已保存');
+    }
+    await expect(board.locator('.sticky-strip')).toHaveCount(5);
+    const firstQuadrant = board.getByRole('region', { name: '紧急不重要', exact: true });
+    const secondQuadrant = board.getByRole('region', { name: '重要且紧急', exact: true });
+    await expect(firstQuadrant.locator('.sticky-strip')).toHaveCount(2);
+    await expect(secondQuadrant.locator('.sticky-strip')).toHaveCount(1);
+    const firstSize = (await firstQuadrant.locator('.sticky-strip').first().boundingBox())!;
+    const quadrantSize = (await firstQuadrant.boundingBox())!;
+    expect(firstSize.height).toBe(68);
+    expect(firstSize.width).toBeGreaterThan(quadrantSize.width * .25);
+    expect(firstSize.width).toBeLessThan(quadrantSize.width * .36);
+    const editorSize = (await firstQuadrant.locator('.sticky-strip').first().getByRole('textbox').boundingBox())!;
+    expect(editorSize.y + editorSize.height).toBeLessThanOrEqual(firstSize.y + firstSize.height);
+    const classes = await board.locator('.sticky-strip').evaluateAll(elements => elements.map(element => [...element.classList].find(name => name.startsWith('sticky-') && !['sticky-strip'].includes(name))));
+    expect(classes.every(Boolean)).toBe(true);
+
+    const moving = firstQuadrant.locator('.sticky-strip').first();
+    await moving.getByRole('button', { name: '拖动调整顺序' }).dragTo(secondQuadrant.locator('.sticky-list'));
+    await expect(secondQuadrant.locator('.sticky-strip')).toHaveCount(2);
+    await expect.poll(() => secondQuadrant.locator('textarea').evaluateAll(elements => elements.map(element => (element as HTMLTextAreaElement).value).sort())).toEqual(['第一条', '第二条']);
+    await expect(board.getByRole('status')).toHaveText('已保存');
+    const secondIndex = await secondQuadrant.locator('textarea').evaluateAll(elements => elements.findIndex(element => (element as HTMLTextAreaElement).value === '第二条'));
+    await secondQuadrant.locator('.sticky-strip').nth(secondIndex).getByRole('button', { name: '拖动调整顺序' }).dragTo(secondQuadrant.locator('.sticky-strip').first());
+    await expect(secondQuadrant.locator('.sticky-strip').first().getByRole('textbox')).toHaveValue('第二条');
+    await page.screenshot({ path: testInfo.outputPath('compact-quadrants.png') });
+
+    await board.getByRole('button', { name: '关闭便签管理' }).click();
+    await page.reload();
+    await page.getByRole('button', { name: '便签管理', exact: true }).click();
+    await expect(secondQuadrant.locator('.sticky-strip').first().getByRole('textbox')).toHaveValue('第二条');
+    await board.getByRole('textbox', { name: '搜索便签' }).fill('第三');
+    await expect(board.locator('.sticky-strip')).toHaveCount(1);
+    await expect(board.getByRole('button', { name: '拖动调整顺序' })).toHaveAttribute('draggable', 'false');
+    await board.getByRole('textbox', { name: '搜索便签' }).fill('');
+    const archiveCandidate = board.getByRole('article', { name: '第二条', exact: true });
+    await archiveCandidate.hover();
+    await archiveCandidate.getByRole('button', { name: '完成便签' }).click();
+    await expect(board.locator('.sticky-strip')).toHaveCount(4);
+    await board.getByRole('button', { name: '查看归档' }).click();
+    const archive = board.getByRole('region', { name: '已归档便签' });
+    await expect(archive).toContainText('第二条');
+    await archive.getByRole('button', { name: '恢复 第二条' }).click();
+    await expect(archive).not.toContainText('第二条');
+    await board.getByRole('button', { name: '返回四象限' }).click();
+    await expect(board.getByRole('article', { name: '第二条', exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally { await app.close(); await rm(directory, { recursive: true, force: true }); }
+});

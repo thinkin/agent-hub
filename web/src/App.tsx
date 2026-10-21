@@ -1,8 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, mergeConversations, sameEnvironment, tabSession, hostKey, type Agent, type AgentType, type Config, type Conversation, type DirectoryListing, type DiscoverResult, type History, type HistoryItem, type Session, type Workspace, type WorkspaceTab } from './api';
 import WorkspaceTools from './WorkspaceTools';
+import Notes from './Notes';
 import type { TerminalHandle } from './Terminal';
 const Terminal = lazy(() => import('./Terminal'));
+function NoteIcon() { return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10l6-6V5a2 2 0 0 0-2-2Z" /><path d="M15 21v-6h6M7 8h10M7 12h6" /></svg>; }
 const emptyAgent = { name: '', type: 'claude-code' as const, connection: 'ssh' as const, target: '', cwd: '~', executable: 'claude', configDir: '', initScript: '' };
 const agentTypes: Record<AgentType, { label: string; executable: string; suffix: string }> = {
   'claude-code': { label: 'Claude Code', executable: 'claude', suffix: 'Claude' },
@@ -317,6 +319,9 @@ function ConversationPicker({ agents, agent, cwd, onAgentChange, onCwdChange, se
 }
 
 export default function App() {
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [notesLoaded, setNotesLoaded] = useState(false);
+  useEffect(() => { if (notesOpen) setNotesLoaded(true); }, [notesOpen]);
   const [config, setConfig] = useState<Config>({ agents: [], historyLimit: 30, workspace: emptyWorkspace, recentCwds: {} });
   const [workspace, setWorkspace] = useState<Workspace>(emptyWorkspace);
   const [sessions, setSessions] = useState<Session[]>([]), [titles, setTitles] = useState<Record<string, HistoryItem[]>>({});
@@ -375,7 +380,7 @@ export default function App() {
   useEffect(() => {
     if (!active || !activeAgent || changedEnvironment) return;
     const shortcut = (event: KeyboardEvent) => {
-      if (document.querySelector('.terminal-control-dialog[open]')) return;
+      if (document.querySelector('dialog[open]')) return;
       if (!event.ctrlKey || !event.shiftKey || event.altKey || event.metaKey || event.repeat) return;
       const tool = event.key.toLowerCase() === 't' ? 'shell' : event.key.toLowerCase() === 'g' ? 'review' : null;
       if (!tool) return;
@@ -511,6 +516,7 @@ export default function App() {
         </button>
       </div>
       {active && <div className="appbar-active" title={`${titleFor(active)}\n${activeAgent ? `${activeAgent.name} · ${activeAgent.connection === 'local' ? '本机' : activeAgent.target}` : ''}\n${active.cwd}`}><span className="appbar-active-title">{titleFor(active)}</span><span className="appbar-active-meta">{activeAgent && <><AgentIcon type={activeAgent.type} size={12} labelled={false} /><span className="appbar-active-agent">{activeAgent.connection === 'local' ? `本机 · ${activeAgent.target}` : activeAgent.target}</span><span aria-hidden="true">·</span></>}<code className="appbar-cwd">{active.cwd}</code></span></div>}
+      <button className="manage-button notes-button" aria-label="便签管理" title="便签管理" aria-expanded={notesOpen} disabled={!ready} onClick={() => setNotesOpen(value => !value)}><NoteIcon /></button>
     </header>
     <div className="tabbar">
       <div className="tabs" ref={tabsViewport} role="tablist" aria-label="打开的对话">{groups.map(group => (
@@ -526,6 +532,7 @@ export default function App() {
       {tabs.length > 0 && <div className="tab-actions"><button aria-label="添加对话" title="新建或打开对话" disabled={!config.agents.length || busy || tabs.length >= 20} onClick={() => openPicker()}>+</button></div>}
     </div>
     <main id="main" className="main" tabIndex={-1}>
+      <button className="mobile-notes-entry" aria-label="便签管理" title="便签管理" aria-expanded={notesOpen} disabled={!ready} onClick={() => setNotesOpen(value => !value)}><NoteIcon /></button>
       <button className={`mobile-conversation-entry${active ? ' has-terminal' : ''}`} aria-label="会话" title="会话" aria-haspopup="dialog" aria-expanded={mobileConversations} onClick={() => setMobileConversations(true)}><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m9.5 3-.6 2.3-1.6.9L5 5.6 2.5 9.9l1.7 1.7v1.8l-1.7 1.7L5 19.4l2.3-.6 1.6.9.6 2.3h5l.6-2.3 1.6-.9 2.3.6 2.5-4.3-1.7-1.7v-1.8l1.7-1.7L19 5.6l-2.3.6-1.6-.9-.6-2.3Z" /><circle cx="12" cy="12.5" r="3" /></svg></button>
       {error && <div className="error-banner" role="alert"><span>{error}</span><button className="icon-button" aria-label="关闭错误" onClick={() => setError('')}>×</button></div>}
       {titleError && <p className="sync-warning">{titleError}</p>}
@@ -535,6 +542,7 @@ export default function App() {
         {!changedEnvironment && activeAgent && <WorkspaceTools key={active.id} tab={active} open={workspaceTool} onOpen={setActiveWorkspaceTool} onClose={() => setActiveWorkspaceTool(null)} onSubmitPrompt={text => terminalHandles.current.get(active.id)?.submitPrompt(text) ?? false} initialReviewFile={reviewFiles.current.get(active.id) ?? ''} onReviewFileChange={path => reviewFiles.current.set(active.id, path)} />}
       </section> : launcherAgent ? <section className="empty-workspace launcher-workspace" aria-label="打开对话"><ConversationLauncher agents={config.agents} agent={launcherAgent} cwd={launcherCwd} onAgentChange={selectLauncherAgent} onCwdChange={selectLauncherCwd} sessions={sessions} titles={titles[launcherAgent.id] ?? []} limit={config.historyLimit} busy={busy} recentCwds={config.recentCwds} onOpen={open} onStart={(agentId, cwd) => launch(agentId, { cwd })} /></section> : <section className="empty-workspace"><span className="prompt-symbol" aria-hidden="true">&gt;_</span><h2>连接远程 Agent</h2><button className="primary" disabled={!ready} onClick={() => setRegistering(true)}>{ready ? '注册第一个 Agent' : '连接本地服务…'}</button></section>}
     </main>
+    {notesLoaded && <Notes visible={notesOpen} onClose={() => setNotesOpen(false)} />}
     {managing && <AgentManager agents={config.agents} onClose={() => setManaging(false)} onRegister={() => { setManaging(false); setRegistering(true); }} onEdit={item => { setManaging(false); setModal(item); }} onRemove={removeAgent} />}
     {registering && <AgentRegister agents={config.agents} onClose={() => setRegistering(false)} onDone={next => { setRegistering(false); act(api<Config>('/config').then(data => { setConfig(data); setWorkspace(next); })); }} onSaved={saved => { setRegistering(false); rememberLauncher(saved); act(api<Config>('/config').then(data => setConfig(data))); }} />}
     {mobileConversations && <dialog ref={mobileDialog} className="mobile-conversation-dialog" aria-label="会话" onCancel={() => setMobileConversations(false)}>

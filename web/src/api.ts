@@ -1,4 +1,5 @@
 export type AgentType = 'claude-code' | 'codex' | 'traex';
+export interface Note { id: string; title: string; content: string; color: 'yellow' | 'pink' | 'green' | 'blue' | 'purple' | 'gray'; layout: { x: number; y: number; width: number; height: number }; quadrant: number; order: number; version: number; created: number; updated: number }
 export interface Agent { id: string; name: string; type: AgentType; connection: 'ssh' | 'local'; target: string; cwd: string; executable: string; configDir: string; initScript?: string; initScriptKey?: string }
 export interface WorkspaceTab { id: string; agentId: string; sessionId: string; agentSessionId?: string; cwd: string; type: AgentType; connection: 'ssh' | 'local'; target: string; configDir: string; initScriptKey?: string }
 const emptyScriptKey = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
