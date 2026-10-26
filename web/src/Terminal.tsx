@@ -31,7 +31,6 @@ const Terminal = forwardRef<TerminalHandle, { sessionId: string; active: boolean
     if (controlBlocked && active) { if (!dialog?.open) dialog?.showModal(); }
     else dialog?.close();
   }, [controlBlocked, active]);
-  const [attempt, setAttempt] = useState(0);
   const takeover = useRef(false);
   const autoTakeover = useRef(false);
   useImperativeHandle(ref, () => ({ submitPrompt: text => submitRef.current(text) }), []);
@@ -148,7 +147,7 @@ const Terminal = forwardRef<TerminalHandle, { sessionId: string; active: boolean
       // those callbacks run while the renderer still exists before releasing it.
       terminal.write('', () => requestAnimationFrame(() => terminal.dispose()));
     };
-  }, [sessionId, endpoint, processLabel, attempt]);
+  }, [sessionId, endpoint, processLabel]);
   useEffect(() => {
     if (!active) return;
     const frame = requestAnimationFrame(() => { resizeRef.current?.(); if (!matchMedia('(pointer: coarse), (max-width: 650px)').matches) terminalRef.current?.focus(); });
@@ -157,8 +156,8 @@ const Terminal = forwardRef<TerminalHandle, { sessionId: string; active: boolean
   return <div className="terminal-panel" data-state={state === '已连接' ? 'connected' : 'other'} hidden={!active}>
     <dialog ref={controlDialog} className="terminal-control-dialog" role="alertdialog" aria-modal="true" aria-labelledby={controlTitle} aria-describedby={controlDescription} onCancel={event => event.preventDefault()} onKeyDown={event => { if (event.key === 'Tab') { event.preventDefault(); event.currentTarget.querySelector('button')?.focus(); } }}>
       <h2 id={controlTitle}>此终端由其他页面控制</h2>
-      <p id={controlDescription}>刷新页面或点击“接管终端”即可继续操作，另一页面将失去控制权。</p>
-      <button className="primary" disabled={state === '接管终端…' || state === '连接终端…'} onClick={() => { takeover.current = true; setState('接管终端…'); setAttempt(x => x + 1); }}>{state === '接管终端…' || state === '连接终端…' ? '正在接管…' : '接管终端'}</button>
+      <p id={controlDescription}>点击“刷新页面”即可接管并继续操作，另一页面将失去控制权。</p>
+      <button className="primary" onClick={() => location.reload()}>刷新页面</button>
     </dialog>
     {state !== '已连接' && !controlBlocked && <div className="terminal-status"><span className="muted-dot" />{state}</div>}
     <div className="terminal-viewport-layout">

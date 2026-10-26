@@ -196,7 +196,7 @@ async function verifyControlConflict(page: Page, testInfo: TestInfo) {
     }), url);
     const dialog = page.getByRole('alertdialog', { name: '此终端由其他页面控制' });
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('刷新页面或点击“接管终端”即可继续操作');
+    await expect(dialog).toContainText('点击“刷新页面”即可接管并继续操作');
     const box = (await dialog.boundingBox())!;
     expect(Math.abs(box.x + box.width / 2 - page.viewportSize()!.width / 2)).toBeLessThan(2);
     expect(Math.abs(box.y + box.height / 2 - page.viewportSize()!.height / 2)).toBeLessThan(2);
@@ -212,7 +212,10 @@ async function verifyControlConflict(page: Page, testInfo: TestInfo) {
     await page.mouse.click(entryBox.x + entryBox.width / 2, entryBox.y + entryBox.height / 2);
     await expect(page.getByRole('dialog', { name: mobile ? '会话' : '管理 Agents', exact: true })).not.toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('control-conflict.png') });
-    await dialog.getByRole('button', { name: '接管终端', exact: true }).click();
+    await Promise.all([
+      page.waitForEvent('load'),
+      dialog.getByRole('button', { name: '刷新页面', exact: true }).click(),
+    ]);
     await expect(dialog).not.toBeVisible();
     await expect(page.locator('.terminal-panel')).toHaveAttribute('data-state', 'connected');
     await entry.click();
